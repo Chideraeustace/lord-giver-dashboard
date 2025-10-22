@@ -288,7 +288,7 @@ const Dashboard = () => {
       setLoading(true);
       const today = getTodayStart();
       const q = query(
-        collection(db, "teller_response"),
+        collection(db, "approve_teller_transaction"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false),
