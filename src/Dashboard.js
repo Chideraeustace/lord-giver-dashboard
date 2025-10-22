@@ -311,7 +311,7 @@ const Dashboard = () => {
         const batch = writeBatch(db);
         const batchDocs = docs.slice(i, i + batchSize);
         batchDocs.forEach((docSnap) => {
-          const docRef = doc(db, "teller_response", docSnap.id);
+          const docRef = doc(db, "approve_teller_transaction", docSnap.id);
           batch.update(docRef, { exported: true });
         });
         await batch.commit();
@@ -346,7 +346,7 @@ const Dashboard = () => {
               limit(maxExportRecords)
             )
           : query(
-              collection(db, "teller_response"),
+              collection(db, "approve_teller_transaction"),
               where("createdAt", ">=", getTodayStart()),
               where("status", "==", "approved"),
               where("exported", "==", false),
