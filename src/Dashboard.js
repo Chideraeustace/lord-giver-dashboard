@@ -110,7 +110,7 @@ const Dashboard = () => {
     try {
       const today = getTodayStart();
       const q = query(
-        collection(db, "teller_response"),
+        collection(db, "approve_teller_transaction"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false)
@@ -119,6 +119,7 @@ const Dashboard = () => {
       setTotalTransactions(querySnapshot.size);
     } catch (err) {
       setError("Failed to fetch total transactions count: " + err.message);
+      console.log(err.message);
     }
   };
 
@@ -183,7 +184,7 @@ const Dashboard = () => {
       setLoading(true);
       const today = getTodayStart();
       let q = query(
-        collection(db, "teller_response"),
+        collection(db, "approve_teller_transaction"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false),
@@ -193,7 +194,7 @@ const Dashboard = () => {
 
       if (page > 1 && transactionsLastDocs[page - 2]) {
         q = query(
-          collection(db, "teller_response"),
+          collection(db, "approve_teller_transaction"),
           where("createdAt", ">=", today),
           where("status", "==", "approved"),
           where("exported", "==", false),
