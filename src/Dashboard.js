@@ -57,21 +57,27 @@ const Dashboard = () => {
   const [tabValue, setTabValue] = useState(0);
   const [numbers, setNumbers] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [ussdTransactions, setUssdTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [numbersPage, setNumbersPage] = useState(1);
   const [transactionsPage, setTransactionsPage] = useState(1);
+  const [ussdPage, setUssdPage] = useState(1);
   const [numbersLastDocs, setNumbersLastDocs] = useState([]);
   const [transactionsLastDocs, setTransactionsLastDocs] = useState([]);
+  const [ussdLastDocs, setUssdLastDocs] = useState([]);
   const [hasMoreNumbers, setHasMoreNumbers] = useState(true);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
+  const [hasMoreUssd, setHasMoreUssd] = useState(true);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [recordCount, setRecordCount] = useState(0);
   const [numbersCache, setNumbersCache] = useState({});
   const [transactionsCache, setTransactionsCache] = useState({});
-  const [totalNumbers, setTotalNumbers] = useState(0); // New state for total numbers
-  const [totalTransactions, setTotalTransactions] = useState(0); // New state for total transactions
+  const [ussdCache, setUssdCache] = useState({});
+  const [totalNumbers, setTotalNumbers] = useState(0);
+  const [totalTransactions, setTotalTransactions] = useState(0);
+  const [totalUssd, setTotalUssd] = useState(0);
   const pageSize = 6; // Number of records per page
   const maxExportRecords = 1000; // Limit for export to prevent overload
   const batchSize = 500; // Firestore batch write limit
@@ -83,10 +89,14 @@ const Dashboard = () => {
       setNumbersPage(1);
       setNumbersLastDocs([]);
       setHasMoreNumbers(true);
-    } else {
+    } else if (newValue === 1) {
       setTransactionsPage(1);
       setTransactionsLastDocs([]);
       setHasMoreTransactions(true);
+    } else if (newValue === 2) {
+      setUssdPage(1);
+      setUssdLastDocs([]);
+      setHasMoreUssd(true);
     }
     setError(null); // Clear error on tab change
   };
@@ -119,6 +129,24 @@ const Dashboard = () => {
       setTotalTransactions(querySnapshot.size);
     } catch (err) {
       setError("Failed to fetch total transactions count: " + err.message);
+      console.log(err.message);
+    }
+  };
+
+  // Fetch total count of USSD transactions
+  const fetchTotalUssd = async () => {
+    try {
+      const today = getTodayStart();
+      const q = query(
+        collection(db, "teller_response"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false)
+      );
+      const querySnapshot = await getDocs(q);
+      setTotalUssd(querySnapshot.size);
+    } catch (err) {
+      setError("Failed to fetch total USSD transactions count: " + err.message);
       console.log(err.message);
     }
   };
@@ -226,16 +254,73 @@ const Dashboard = () => {
     }
   };
 
+  // Fetch USSD transactions with pagination and caching
+  const fetchUssdTransactions = async (page = 1) => {
+    if (ussdCache[page]) {
+      setUssdTransactions(ussdCache[page]);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const today = getTodayStart();
+      let q = query(
+        collection(db, "teller_response"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false),
+        orderBy("createdAt"),
+        limit(pageSize)
+      );
+
+      if (page > 1 && ussdLastDocs[page - 2]) {
+        q = query(
+          collection(db, "teller_response"),
+          where("createdAt", ">=", today),
+          where("status", "==", "approved"),
+          where("exported", "==", false),
+          orderBy("createdAt"),
+          startAfter(ussdLastDocs[page - 2]),
+          limit(pageSize)
+        );
+      }
+
+      const querySnapshot = await getDocs(q);
+      const data = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      setUssdTransactions(data);
+      setUssdCache((prev) => ({ ...prev, [page]: data }));
+      if (querySnapshot.docs.length > 0) {
+        const newLastDocs = [...ussdLastDocs];
+        newLastDocs[page - 1] =
+          querySnapshot.docs[querySnapshot.docs.length - 1];
+        setUssdLastDocs(newLastDocs);
+      }
+      setHasMoreUssd(querySnapshot.docs.length === pageSize);
+      setLoading(false);
+    } catch (err) {
+      setError("Failed to fetch USSD transactions: " + err.message);
+      setLoading(false);
+    }
+  };
+
   // Fetch data and total counts on component mount and page/tab change
   useEffect(() => {
     if (tabValue === 0) {
       fetchNumbers(numbersPage);
       fetchTotalNumbers(); // Fetch total numbers count
-    } else {
+    } else if (tabValue === 1) {
       fetchTransactions(transactionsPage);
       fetchTotalTransactions(); // Fetch total transactions count
+    } else if (tabValue === 2) {
+      fetchUssdTransactions(ussdPage);
+      fetchTotalUssd(); // Fetch total USSD transactions count
     }
-  }, [tabValue, numbersPage, transactionsPage]);
+  }, [tabValue, numbersPage, transactionsPage, ussdPage]);
 
   // Handle download for Numbers with batch update
   const handleDownloadNumbers = async () => {
@@ -334,24 +419,87 @@ const Dashboard = () => {
     }
   };
 
+  // Handle download for USSD Transactions with batch update
+  const handleDownloadUssd = async () => {
+    try {
+      setLoading(true);
+      const today = getTodayStart();
+      const q = query(
+        collection(db, "teller_response"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false),
+        limit(maxExportRecords)
+      );
+      const querySnapshot = await getDocs(q);
+      const docs = querySnapshot.docs;
+      const data = docs.map((doc) => ({
+        Number: formatPhoneNumber(
+          doc.data().subscriber_number || doc.data().number
+        ),
+        GB: doc.data().gb || extractGB(doc.data().desc) || "N/A",
+      }));
+
+      setRecordCount(docs.length);
+
+      // Split batch writes into chunks of 500
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        const batchDocs = docs.slice(i, i + batchSize);
+        batchDocs.forEach((docSnap) => {
+          const docRef = doc(db, "teller_response", docSnap.id);
+          batch.update(docRef, { exported: true });
+        });
+        await batch.commit();
+      }
+
+      // Generate and download Excel
+      downloadExcel(data, "UssdTransactions.xlsx", ["Number", "GB"]);
+
+      // Clear cache and refresh data
+      setUssdCache({});
+      setUssdPage(1);
+      setUssdLastDocs([]);
+      setHasMoreUssd(true);
+      await fetchUssdTransactions(1);
+      await fetchTotalUssd(); // Refresh total USSD transactions count
+    } catch (err) {
+      setError(
+        "Failed to download or update USSD transactions: " + err.message
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle confirmation dialog
   const openConfirmDialog = async (action) => {
     try {
       setLoading(true);
-      const q =
-        tabValue === 0
-          ? query(
-              collection(db, "entries"),
-              where("exported", "==", false),
-              limit(maxExportRecords)
-            )
-          : query(
-              collection(db, "approve_teller_transaction"),
-              where("createdAt", ">=", getTodayStart()),
-              where("status", "==", "approved"),
-              where("exported", "==", false),
-              limit(maxExportRecords)
-            );
+      let q;
+      if (tabValue === 0) {
+        q = query(
+          collection(db, "entries"),
+          where("exported", "==", false),
+          limit(maxExportRecords)
+        );
+      } else if (tabValue === 1) {
+        q = query(
+          collection(db, "approve_teller_transaction"),
+          where("createdAt", ">=", getTodayStart()),
+          where("status", "==", "approved"),
+          where("exported", "==", false),
+          limit(maxExportRecords)
+        );
+      } else if (tabValue === 2) {
+        q = query(
+          collection(db, "teller_response"),
+          where("createdAt", ">=", getTodayStart()),
+          where("status", "==", "approved"),
+          where("exported", "==", false),
+          limit(maxExportRecords)
+        );
+      }
       const querySnapshot = await getDocs(q);
       setRecordCount(querySnapshot.docs.length);
       setConfirmAction(() => action);
@@ -383,9 +531,11 @@ const Dashboard = () => {
         setNumbersPage((prev) => prev - 1);
       } else if (tabValue === 1 && transactionsPage > 1) {
         setTransactionsPage((prev) => prev - 1);
+      } else if (tabValue === 2 && ussdPage > 1) {
+        setUssdPage((prev) => prev - 1);
       }
     }, 300),
-    [tabValue, numbersPage, transactionsPage]
+    [tabValue, numbersPage, transactionsPage, ussdPage]
   );
 
   const handleNextPage = useCallback(
@@ -394,9 +544,11 @@ const Dashboard = () => {
         setNumbersPage((prev) => prev + 1);
       } else if (tabValue === 1 && hasMoreTransactions) {
         setTransactionsPage((prev) => prev + 1);
+      } else if (tabValue === 2 && hasMoreUssd) {
+        setUssdPage((prev) => prev + 1);
       }
     }, 300),
-    [tabValue, hasMoreNumbers, hasMoreTransactions]
+    [tabValue, hasMoreNumbers, hasMoreTransactions, hasMoreUssd]
   );
 
   // Clear error after 5 seconds
@@ -418,8 +570,12 @@ const Dashboard = () => {
             </h3>
             <p className="text-gray-600 mb-6">
               Are you sure you want to export {recordCount}{" "}
-              {tabValue === 0 ? "numbers" : "transactions"}? This will mark them
-              as exported.
+              {tabValue === 0
+                ? "numbers"
+                : tabValue === 1
+                ? "transactions"
+                : "ussd transactions"}
+              ? This will mark them as exported.
               {recordCount >= maxExportRecords &&
                 ` Only the first ${maxExportRecords} records will be exported due to system limits.`}
             </p>
@@ -461,7 +617,17 @@ const Dashboard = () => {
           }`}
           onClick={() => handleTabChange(1)}
         >
-          Transactions
+          Website Transactions
+        </button>
+        <button
+          className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors duration-200 sm:text-base ${
+            tabValue === 2
+              ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
+              : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
+          }`}
+          onClick={() => handleTabChange(2)}
+        >
+          USSD Transactions
         </button>
       </div>
 
@@ -556,7 +722,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Transactions Tab (teller_response collection) */}
+      {/* Transactions Tab (approve_teller_transaction collection) */}
       {tabValue === 1 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -628,6 +794,83 @@ const Dashboard = () => {
           ) : (
             <p className="text-gray-600 text-center text-lg">
               No transactions found.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* USSD Transactions Tab (teller_response collection) */}
+      {tabValue === 2 && !loading && !error && (
+        <div className="mt-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
+              Today's USSD Transactions
+            </h2>
+            {ussdTransactions.length > 0 && (
+              <button
+                onClick={() => openConfirmDialog(handleDownloadUssd)}
+                className="mt-2 sm:mt-0 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 text-sm sm:text-base shadow-md"
+              >
+                Download USSD Transactions (Excel)
+              </button>
+            )}
+          </div>
+          <p className="text-sm text-gray-600 mb-4">
+            Total Records: {totalUssd} | Current Page: {ussdTransactions.length}{" "}
+            (Page {ussdPage})
+          </p>
+          {ussdTransactions.length > 0 ? (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {ussdTransactions.map((tx) => (
+                  <div
+                    key={tx.id}
+                    className="p-4 bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-200"
+                  >
+                    <p className="text-sm sm:text-base">
+                      <span className="font-semibold text-gray-700">
+                        Number:
+                      </span>{" "}
+                      {formatPhoneNumber(tx.subscriber_number || tx.number)}
+                    </p>
+                    <p className="text-sm sm:text-base">
+                      <span className="font-semibold text-gray-700">GB:</span>{" "}
+                      {tx.gb || extractGB(tx.desc) || "N/A"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-between items-center mt-6">
+                <button
+                  onClick={handlePrevPage}
+                  disabled={ussdPage === 1}
+                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
+                    ussdPage === 1
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                      : "bg-blue-600 text-white hover:bg-blue-700"
+                  } transition-colors duration-200`}
+                >
+                  Previous
+                </button>
+                <span className="text-sm sm:text-base text-gray-600">
+                  Page {ussdPage}
+                </span>
+                <button
+                  onClick={handleNextPage}
+                  disabled={!hasMoreUssd}
+                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
+                    !hasMoreUssd
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                      : "bg-blue-600 text-white hover:bg-blue-700"
+                  } transition-colors duration-200`}
+                >
+                  Next
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="text-gray-600 text-center text-lg">
+              No USSD transactions found.
             </p>
           )}
         </div>
