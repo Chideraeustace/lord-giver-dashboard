@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   collection,
   query,
@@ -13,33 +13,27 @@ import {
 import { db } from "./firebase";
 import * as XLSX from "xlsx";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Utilities (unchanged)
+/* ──────────────────────  UTILITIES  ────────────────────── */
 const getTodayStart = () => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return today;
 };
 
-const extractGB = (desc) => {
-  if (!desc) return "N/A";
-  const match = desc.match(/(\d+)GB/);
-  return match ? match[1] : "N/A";
-};
+const extractGB = (desc) =>
+  !desc ? "N/A" : desc.match(/(\d+)GB/)?.[1] ?? "N/A";
 
 const formatPhoneNumber = (number) => {
   if (!number) return "N/A";
-  const cleanedNumber = number.replace(/^233/, "");
-  return cleanedNumber.length === 9
-    ? `0${cleanedNumber}`
-    : cleanedNumber || "N/A";
+  const cleaned = number.replace(/^233/, "");
+  return cleaned.length === 9 ? `0${cleaned}` : cleaned || "N/A";
 };
 
 const downloadExcel = (data, fileName, headers) => {
-  const worksheet = XLSX.utils.json_to_sheet(data, { header: headers });
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
-  XLSX.writeFile(workbook, fileName);
+  const ws = XLSX.utils.json_to_sheet(data, { header: headers });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  XLSX.writeFile(wb, fileName);
 };
 
 const debounce = (func, wait) => {
@@ -49,49 +43,49 @@ const debounce = (func, wait) => {
     timeout = setTimeout(() => func(...args), wait);
   };
 };
-// ─────────────────────────────────────────────────────────────────────────────
+/* ──────────────────────────────────────────────────────── */
 
 const Dashboard = () => {
-  // ──────────────────────  STATE  ──────────────────────
+  /* ──────────────────────  STATE  ────────────────────── */
   const [tabValue, setTabValue] = useState(0);
   const [numbers, setNumbers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [ussdTransactions, setUssdTransactions] = useState([]);
-  const [kaditoTransactions, setKaditoTransactions] = useState([]); // ← Kadito data
+  const [kaditoTransactions, setKaditoTransactions] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Pagination
+  // pagination
   const [numbersPage, setNumbersPage] = useState(1);
   const [transactionsPage, setTransactionsPage] = useState(1);
   const [ussdPage, setUssdPage] = useState(1);
   const [kaditoPage, setKaditoPage] = useState(1);
 
-  // Last docs for cursor pagination
+  // last docs for cursor pagination
   const [numbersLastDocs, setNumbersLastDocs] = useState([]);
   const [transactionsLastDocs, setTransactionsLastDocs] = useState([]);
   const [ussdLastDocs, setUssdLastDocs] = useState([]);
   const [kaditoLastDocs, setKaditoLastDocs] = useState([]);
 
-  // Has-more flags
+  // has-more flags
   const [hasMoreNumbers, setHasMoreNumbers] = useState(true);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
   const [hasMoreUssd, setHasMoreUssd] = useState(true);
   const [hasMoreKadito, setHasMoreKadito] = useState(true);
 
-  // Confirmation dialog
+  // confirm dialog
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [recordCount, setRecordCount] = useState(0);
 
-  // Caches
+  // caches
   const [numbersCache, setNumbersCache] = useState({});
   const [transactionsCache, setTransactionsCache] = useState({});
   const [ussdCache, setUssdCache] = useState({});
   const [kaditoCache, setKaditoCache] = useState({});
 
-  // Totals
+  // totals
   const [totalNumbers, setTotalNumbers] = useState(0);
   const [totalTransactions, setTotalTransactions] = useState(0);
   const [totalUssd, setTotalUssd] = useState(0);
@@ -100,10 +94,10 @@ const Dashboard = () => {
   const pageSize = 6;
   const maxExportRecords = 1000;
   const batchSize = 500;
-  // ───────────────────────────────────────────────────────
+  /* ──────────────────────────────────────────────────────── */
 
-  // ──────────────────────  TAB HANDLING  ──────────────────────
-  const handleTabChange = (newValue) => {
+  /* ──────────────────────  TAB HANDLING  ────────────────────── */
+  const handleTabChange = useCallback((newValue) => {
     setTabValue(newValue);
     if (newValue === 0) {
       setNumbersPage(1);
@@ -123,11 +117,11 @@ const Dashboard = () => {
       setHasMoreKadito(true);
     }
     setError(null);
-  };
-  // ───────────────────────────────────────────────────────────────
+  }, []);
+  /* ──────────────────────────────────────────────────────────────── */
 
-  // ──────────────────────  TOTAL COUNTS  ──────────────────────
-  const fetchTotalNumbers = async () => {
+  /* ──────────────────────  TOTAL COUNTS (stable)  ────────────────────── */
+  const fetchTotalNumbers = useCallback(async () => {
     try {
       const q = query(
         collection(db, "entries"),
@@ -136,11 +130,11 @@ const Dashboard = () => {
       const snap = await getDocs(q);
       setTotalNumbers(snap.size);
     } catch (e) {
-      setError("Total numbers: " + e.message);
+      setError(`Total numbers: ${e.message}`);
     }
-  };
+  }, []);
 
-  const fetchTotalTransactions = async () => {
+  const fetchTotalTransactions = useCallback(async () => {
     try {
       const today = getTodayStart();
       const q = query(
@@ -152,11 +146,11 @@ const Dashboard = () => {
       const snap = await getDocs(q);
       setTotalTransactions(snap.size);
     } catch (e) {
-      setError("Total transactions: " + e.message);
+      setError(`Total transactions: ${e.message}`);
     }
-  };
+  }, []);
 
-  const fetchTotalUssd = async () => {
+  const fetchTotalUssd = useCallback(async () => {
     try {
       const today = getTodayStart();
       const q = query(
@@ -168,12 +162,11 @@ const Dashboard = () => {
       const snap = await getDocs(q);
       setTotalUssd(snap.size);
     } catch (e) {
-      setError("Total USSD: " + e.message);
+      setError(`Total USSD: ${e.message}`);
     }
-  };
+  }, []);
 
-  // **KADITO TOTAL** – uses `kadis_purchase`
-  const fetchTotalKadito = async () => {
+  const fetchTotalKadito = useCallback(async () => {
     try {
       const today = getTodayStart();
       const q = query(
@@ -185,195 +178,201 @@ const Dashboard = () => {
       const snap = await getDocs(q);
       setTotalKadito(snap.size);
     } catch (e) {
-      setError("Total Kadito: " + e.message);
-      console.log(e.message)
+      setError(`Total Kadito: ${e.message}`);
     }
-  };
-  // ───────────────────────────────────────────────────────────────
+  }, []);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  // ──────────────────────  DATA FETCHERS  ──────────────────────
-  const fetchNumbers = async (page = 1) => {
-    if (numbersCache[page]) {
-      setNumbers(numbersCache[page]);
-      setLoading(false);
-      return;
-    }
-    try {
-      setLoading(true);
-      let q = query(
-        collection(db, "entries"),
-        where("exported", "==", false),
-        orderBy("phoneNumber"),
-        limit(pageSize)
-      );
-      if (page > 1 && numbersLastDocs[page - 2]) {
-        q = query(
+  /* ──────────────────────  DATA FETCHERS (stable)  ────────────────────── */
+  const fetchNumbers = useCallback(
+    async (page = 1) => {
+      if (numbersCache[page]) {
+        setNumbers(numbersCache[page]);
+        setLoading(false);
+        return;
+      }
+      try {
+        setLoading(true);
+        let q = query(
           collection(db, "entries"),
           where("exported", "==", false),
           orderBy("phoneNumber"),
-          startAfter(numbersLastDocs[page - 2]),
           limit(pageSize)
         );
+        if (page > 1 && numbersLastDocs[page - 2]) {
+          q = query(
+            collection(db, "entries"),
+            where("exported", "==", false),
+            orderBy("phoneNumber"),
+            startAfter(numbersLastDocs[page - 2]),
+            limit(pageSize)
+          );
+        }
+        const snap = await getDocs(q);
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setNumbers(data);
+        setNumbersCache((p) => ({ ...p, [page]: data }));
+        if (snap.docs.length > 0) {
+          const newLast = [...numbersLastDocs];
+          newLast[page - 1] = snap.docs[snap.docs.length - 1];
+          setNumbersLastDocs(newLast);
+        }
+        setHasMoreNumbers(snap.docs.length === pageSize);
+        setLoading(false);
+      } catch (e) {
+        setError(`Numbers: ${e.message}`);
+        setLoading(false);
       }
-      const snap = await getDocs(q);
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setNumbers(data);
-      setNumbersCache((p) => ({ ...p, [page]: data }));
-      if (snap.docs.length > 0) {
-        const newLast = [...numbersLastDocs];
-        newLast[page - 1] = snap.docs[snap.docs.length - 1];
-        setNumbersLastDocs(newLast);
-      }
-      setHasMoreNumbers(snap.docs.length === pageSize);
-      setLoading(false);
-    } catch (e) {
-      setError("Numbers: " + e.message);
-      setLoading(false);
-    }
-  };
+    },
+    [numbersCache, numbersLastDocs]
+  );
 
-  const fetchTransactions = async (page = 1) => {
-    if (transactionsCache[page]) {
-      setTransactions(transactionsCache[page]);
-      setLoading(false);
-      return;
-    }
-    try {
-      setLoading(true);
-      const today = getTodayStart();
-      let q = query(
-        collection(db, "approve_teller_transaction"),
-        where("createdAt", ">=", today),
-        where("status", "==", "approved"),
-        where("exported", "==", false),
-        orderBy("createdAt"),
-        limit(pageSize)
-      );
-      if (page > 1 && transactionsLastDocs[page - 2]) {
-        q = query(
+  const fetchTransactions = useCallback(
+    async (page = 1) => {
+      if (transactionsCache[page]) {
+        setTransactions(transactionsCache[page]);
+        setLoading(false);
+        return;
+      }
+      try {
+        setLoading(true);
+        const today = getTodayStart();
+        let q = query(
           collection(db, "approve_teller_transaction"),
           where("createdAt", ">=", today),
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
-          startAfter(transactionsLastDocs[page - 2]),
           limit(pageSize)
         );
+        if (page > 1 && transactionsLastDocs[page - 2]) {
+          q = query(
+            collection(db, "approve_teller_transaction"),
+            where("createdAt", ">=", today),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            orderBy("createdAt"),
+            startAfter(transactionsLastDocs[page - 2]),
+            limit(pageSize)
+          );
+        }
+        const snap = await getDocs(q);
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setTransactions(data);
+        setTransactionsCache((p) => ({ ...p, [page]: data }));
+        if (snap.docs.length > 0) {
+          const newLast = [...transactionsLastDocs];
+          newLast[page - 1] = snap.docs[snap.docs.length - 1];
+          setTransactionsLastDocs(newLast);
+        }
+        setHasMoreTransactions(snap.docs.length === pageSize);
+        setLoading(false);
+      } catch (e) {
+        setError(`Transactions: ${e.message}`);
+        setLoading(false);
       }
-      const snap = await getDocs(q);
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setTransactions(data);
-      setTransactionsCache((p) => ({ ...p, [page]: data }));
-      if (snap.docs.length > 0) {
-        const newLast = [...transactionsLastDocs];
-        newLast[page - 1] = snap.docs[snap.docs.length - 1];
-        setTransactionsLastDocs(newLast);
-      }
-      setHasMoreTransactions(snap.docs.length === pageSize);
-      setLoading(false);
-    } catch (e) {
-      setError("Transactions: " + e.message);
-      setLoading(false);
-    }
-  };
+    },
+    [transactionsCache, transactionsLastDocs]
+  );
 
-  const fetchUssdTransactions = async (page = 1) => {
-    if (ussdCache[page]) {
-      setUssdTransactions(ussdCache[page]);
-      setLoading(false);
-      return;
-    }
-    try {
-      setLoading(true);
-      const today = getTodayStart();
-      let q = query(
-        collection(db, "teller_response"),
-        where("createdAt", ">=", today),
-        where("status", "==", "approved"),
-        where("exported", "==", false),
-        orderBy("createdAt"),
-        limit(pageSize)
-      );
-      if (page > 1 && ussdLastDocs[page - 2]) {
-        q = query(
+  const fetchUssdTransactions = useCallback(
+    async (page = 1) => {
+      if (ussdCache[page]) {
+        setUssdTransactions(ussdCache[page]);
+        setLoading(false);
+        return;
+      }
+      try {
+        setLoading(true);
+        const today = getTodayStart();
+        let q = query(
           collection(db, "teller_response"),
           where("createdAt", ">=", today),
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
-          startAfter(ussdLastDocs[page - 2]),
           limit(pageSize)
         );
+        if (page > 1 && ussdLastDocs[page - 2]) {
+          q = query(
+            collection(db, "teller_response"),
+            where("createdAt", ">=", today),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            orderBy("createdAt"),
+            startAfter(ussdLastDocs[page - 2]),
+            limit(pageSize)
+          );
+        }
+        const snap = await getDocs(q);
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setUssdTransactions(data);
+        setUssdCache((p) => ({ ...p, [page]: data }));
+        if (snap.docs.length > 0) {
+          const newLast = [...ussdLastDocs];
+          newLast[page - 1] = snap.docs[snap.docs.length - 1];
+          setUssdLastDocs(newLast);
+        }
+        setHasMoreUssd(snap.docs.length === pageSize);
+        setLoading(false);
+      } catch (e) {
+        setError(`USSD: ${e.message}`);
+        setLoading(false);
       }
-      const snap = await getDocs(q);
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setUssdTransactions(data);
-      setUssdCache((p) => ({ ...p, [page]: data }));
-      if (snap.docs.length > 0) {
-        const newLast = [...ussdLastDocs];
-        newLast[page - 1] = snap.docs[snap.docs.length - 1];
-        setUssdLastDocs(newLast);
+    },
+    [ussdCache, ussdLastDocs]
+  );
+
+  const fetchKaditoTransactions = useCallback(
+    async (page = 1) => {
+      if (kaditoCache[page]) {
+        setKaditoTransactions(kaditoCache[page]);
+        setLoading(false);
+        return;
       }
-      setHasMoreUssd(snap.docs.length === pageSize);
-      setLoading(false);
-    } catch (e) {
-      setError("USSD: " + e.message);
-      setLoading(false);
-    }
-  };
-
-  // **KADITO FETCHER** – from `kadis_purchase`
-  const fetchKaditoTransactions = async (page = 1) => {
-    if (kaditoCache[page]) {
-      setKaditoTransactions(kaditoCache[page]);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const today = getTodayStart();
-      let q = query(
-        collection(db, "kadis_purchase"),
-        where("createdAt", ">=", today),
-        where("status", "==", "approved"),
-        where("exported", "==", false),
-        orderBy("createdAt"),
-        limit(pageSize)
-      );
-
-      if (page > 1 && kaditoLastDocs[page - 2]) {
-        q = query(
+      try {
+        setLoading(true);
+        const today = getTodayStart();
+        let q = query(
           collection(db, "kadis_purchase"),
           where("createdAt", ">=", today),
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
-          startAfter(kaditoLastDocs[page - 2]),
           limit(pageSize)
         );
+        if (page > 1 && kaditoLastDocs[page - 2]) {
+          q = query(
+            collection(db, "kadis_purchase"),
+            where("createdAt", ">=", today),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            orderBy("createdAt"),
+            startAfter(kaditoLastDocs[page - 2]),
+            limit(pageSize)
+          );
+        }
+        const snap = await getDocs(q);
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setKaditoTransactions(data);
+        setKaditoCache((p) => ({ ...p, [page]: data }));
+        if (snap.docs.length > 0) {
+          const newLast = [...kaditoLastDocs];
+          newLast[page - 1] = snap.docs[snap.docs.length - 1];
+          setKaditoLastDocs(newLast);
+        }
+        setHasMoreKadito(snap.docs.length === pageSize);
+        setLoading(false);
+      } catch (e) {
+        setError(`Kadito fetch: ${e.message}`);
+        setLoading(false);
       }
+    },
+    [kaditoCache, kaditoLastDocs]
+  );
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-      const snap = await getDocs(q);
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-      setKaditoTransactions(data);
-      setKaditoCache((p) => ({ ...p, [page]: data }));
-      if (snap.docs.length > 0) {
-        const newLast = [...kaditoLastDocs];
-        newLast[page - 1] = snap.docs[snap.docs.length - 1];
-        setKaditoLastDocs(newLast);
-      }
-      setHasMoreKadito(snap.docs.length === pageSize);
-      setLoading(false);
-    } catch (e) {
-      setError("Kadito fetch: " + e.message);
-      setLoading(false);
-    }
-  };
-  // ───────────────────────────────────────────────────────────────
-
-  // ──────────────────────  EFFECT (load on tab/page) ──────────────────────
+  /* ──────────────────────  LOAD ON TAB / PAGE CHANGE  ────────────────────── */
   useEffect(() => {
     if (tabValue === 0) {
       fetchNumbers(numbersPage);
@@ -388,22 +387,147 @@ const Dashboard = () => {
       fetchKaditoTransactions(kaditoPage);
       fetchTotalKadito();
     }
-  }, [tabValue, numbersPage, transactionsPage, ussdPage, kaditoPage]);
-  // ───────────────────────────────────────────────────────────────────────
+  }, [
+    tabValue,
+    numbersPage,
+    transactionsPage,
+    ussdPage,
+    kaditoPage,
+    fetchNumbers,
+    fetchTransactions,
+    fetchUssdTransactions,
+    fetchKaditoTransactions,
+    fetchTotalNumbers,
+    fetchTotalTransactions,
+    fetchTotalUssd,
+    fetchTotalKadito,
+  ]);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  // ──────────────────────  DOWNLOAD HANDLERS  ──────────────────────
-  const handleDownloadNumbers = async () => {
-    /* unchanged – see original */
-  };
-  const handleDownloadTransactions = async () => {
-    /* unchanged – see original */
-  };
-  const handleDownloadUssd = async () => {
-    /* unchanged – see original */
-  };
+  /* ──────────────────────  DOWNLOAD HANDLERS (stable)  ────────────────────── */
+  const handleDownloadNumbers = useCallback(async () => {
+    try {
+      setLoading(true);
+      const q = query(
+        collection(db, "entries"),
+        where("exported", "==", false),
+        limit(maxExportRecords)
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs;
+      const data = docs.map((d) => ({
+        "Phone Number": formatPhoneNumber(d.data().phoneNumber),
+        "Network Provider": d.data().networkProvider || "N/A",
+      }));
+      setRecordCount(docs.length);
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + batchSize).forEach((docSnap) => {
+          batch.update(doc(db, "entries", docSnap.id), { exported: true });
+        });
+        await batch.commit();
+      }
+      downloadExcel(data, "Numbers.xlsx", ["Phone Number", "Network Provider"]);
+      setNumbersCache({});
+      setNumbersPage(1);
+      setNumbersLastDocs([]);
+      setHasMoreNumbers(true);
+      await fetchNumbers(1);
+      await fetchTotalNumbers();
+    } catch (e) {
+      setError(`Numbers download: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchNumbers, fetchTotalNumbers]);
 
-  // **KADITO DOWNLOAD** – from `kadis_purchase`
-  const handleDownloadKadito = async () => {
+  const handleDownloadTransactions = useCallback(async () => {
+    try {
+      setLoading(true);
+      const today = getTodayStart();
+      const q = query(
+        collection(db, "approve_teller_transaction"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false),
+        limit(maxExportRecords)
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs;
+      const data = docs.map((d) => ({
+        Number: formatPhoneNumber(
+          d.data().subscriber_number || d.data().number
+        ),
+        GB: d.data().gb || extractGB(d.data().desc) || "N/A",
+      }));
+      setRecordCount(docs.length);
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + batchSize).forEach((docSnap) => {
+          batch.update(doc(db, "approve_teller_transaction", docSnap.id), {
+            exported: true,
+          });
+        });
+        await batch.commit();
+      }
+      downloadExcel(data, "Transactions.xlsx", ["Number", "GB"]);
+      setTransactionsCache({});
+      setTransactionsPage(1);
+      setTransactionsLastDocs([]);
+      setHasMoreTransactions(true);
+      await fetchTransactions(1);
+      await fetchTotalTransactions();
+    } catch (e) {
+      setError(`Transactions download: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchTransactions, fetchTotalTransactions]);
+
+  const handleDownloadUssd = useCallback(async () => {
+    try {
+      setLoading(true);
+      const today = getTodayStart();
+      const q = query(
+        collection(db, "teller_response"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false),
+        limit(maxExportRecords)
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs;
+      const data = docs.map((d) => ({
+        Number: formatPhoneNumber(
+          d.data().subscriber_number || d.data().number
+        ),
+        GB: d.data().gb || extractGB(d.data().desc) || "N/A",
+      }));
+      setRecordCount(docs.length);
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + batchSize).forEach((docSnap) => {
+          batch.update(doc(db, "teller_response", docSnap.id), {
+            exported: true,
+          });
+        });
+        await batch.commit();
+      }
+      downloadExcel(data, "UssdTransactions.xlsx", ["Number", "GB"]);
+      setUssdCache({});
+      setUssdPage(1);
+      setUssdLastDocs([]);
+      setHasMoreUssd(true);
+      await fetchUssdTransactions(1);
+      await fetchTotalUssd();
+    } catch (e) {
+      setError(`USSD download: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchUssdTransactions, fetchTotalUssd]);
+
+  const handleDownloadKadito = useCallback(async () => {
     try {
       setLoading(true);
       const today = getTodayStart();
@@ -422,10 +546,7 @@ const Dashboard = () => {
         ),
         GB: d.data().gb || extractGB(d.data().desc) || "N/A",
       }));
-
       setRecordCount(docs.length);
-
-      // Batch update exported = true
       for (let i = 0; i < docs.length; i += batchSize) {
         const batch = writeBatch(db);
         docs.slice(i, i + batchSize).forEach((docSnap) => {
@@ -435,10 +556,7 @@ const Dashboard = () => {
         });
         await batch.commit();
       }
-
       downloadExcel(data, "KaditoTransactions.xlsx", ["Number", "GB"]);
-
-      // Reset cache & reload
       setKaditoCache({});
       setKaditoPage(1);
       setKaditoLastDocs([]);
@@ -446,109 +564,117 @@ const Dashboard = () => {
       await fetchKaditoTransactions(1);
       await fetchTotalKadito();
     } catch (e) {
-      setError("Kadito download: " + e.message);
+      setError(`Kadito download: ${e.message}`);
     } finally {
       setLoading(false);
     }
-  };
-  // ───────────────────────────────────────────────────────────────────────
+  }, [fetchKaditoTransactions, fetchTotalKadito]);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  // ──────────────────────  CONFIRM DIALOG  ──────────────────────
-  const openConfirmDialog = async (action) => {
-    try {
-      setLoading(true);
-      let q;
-      if (tabValue === 0) {
-        q = query(
-          collection(db, "entries"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
-      } else if (tabValue === 1) {
-        q = query(
-          collection(db, "approve_teller_transaction"),
-          where("createdAt", ">=", getTodayStart()),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
-      } else if (tabValue === 2) {
-        q = query(
-          collection(db, "teller_response"),
-          where("createdAt", ">=", getTodayStart()),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
-      } else if (tabValue === 3) {
-        q = query(
-          collection(db, "kadis_purchase"),
-          where("createdAt", ">=", getTodayStart()),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
+  /* ──────────────────────  CONFIRM DIALOG  ────────────────────── */
+  const openConfirmDialog = useCallback(
+    async (action) => {
+      try {
+        setLoading(true);
+        let q;
+        if (tabValue === 0) {
+          q = query(
+            collection(db, "entries"),
+            where("exported", "==", false),
+            limit(maxExportRecords)
+          );
+        } else if (tabValue === 1) {
+          q = query(
+            collection(db, "approve_teller_transaction"),
+            where("createdAt", ">=", getTodayStart()),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            limit(maxExportRecords)
+          );
+        } else if (tabValue === 2) {
+          q = query(
+            collection(db, "teller_response"),
+            where("createdAt", ">=", getTodayStart()),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            limit(maxExportRecords)
+          );
+        } else if (tabValue === 3) {
+          q = query(
+            collection(db, "kadis_purchase"),
+            where("createdAt", ">=", getTodayStart()),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            limit(maxExportRecords)
+          );
+        }
+        const snap = await getDocs(q);
+        setRecordCount(snap.docs.length);
+        setConfirmAction(() => action);
+        setShowConfirmDialog(true);
+      } catch (e) {
+        setError(`Record count: ${e.message}`);
+      } finally {
+        setLoading(false);
       }
-      const snap = await getDocs(q);
-      setRecordCount(snap.docs.length);
-      setConfirmAction(() => action);
-      setShowConfirmDialog(true);
-    } catch (e) {
-      setError("Record count: " + e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [tabValue]
+  );
 
-  const closeConfirmDialog = () => {
+  const closeConfirmDialog = useCallback(() => {
     setShowConfirmDialog(false);
     setConfirmAction(null);
     setRecordCount(0);
-  };
+  }, []);
 
-  const confirmDownload = () => {
+  const confirmDownload = useCallback(() => {
     if (confirmAction) confirmAction();
     closeConfirmDialog();
-  };
-  // ───────────────────────────────────────────────────────────────────────
+  }, [confirmAction, closeConfirmDialog]);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  // ──────────────────────  PAGINATION DEBOUNCE  ──────────────────────
-  const handlePrevPage = useCallback(
-    debounce(() => {
-      if (tabValue === 0 && numbersPage > 1) setNumbersPage((p) => p - 1);
-      else if (tabValue === 1 && transactionsPage > 1)
-        setTransactionsPage((p) => p - 1);
-      else if (tabValue === 2 && ussdPage > 1) setUssdPage((p) => p - 1);
-      else if (tabValue === 3 && kaditoPage > 1) setKaditoPage((p) => p - 1);
-    }, 300),
+  /* ──────────────────────  DEBOUNCED PAGINATION (useMemo + useCallback)  ────────────────────── */
+  const debouncedPrev = useMemo(
+    () =>
+      debounce(() => {
+        if (tabValue === 0 && numbersPage > 1) setNumbersPage((p) => p - 1);
+        else if (tabValue === 1 && transactionsPage > 1)
+          setTransactionsPage((p) => p - 1);
+        else if (tabValue === 2 && ussdPage > 1) setUssdPage((p) => p - 1);
+        else if (tabValue === 3 && kaditoPage > 1) setKaditoPage((p) => p - 1);
+      }, 300),
     [tabValue, numbersPage, transactionsPage, ussdPage, kaditoPage]
   );
 
-  const handleNextPage = useCallback(
-    debounce(() => {
-      if (tabValue === 0 && hasMoreNumbers) setNumbersPage((p) => p + 1);
-      else if (tabValue === 1 && hasMoreTransactions)
-        setTransactionsPage((p) => p + 1);
-      else if (tabValue === 2 && hasMoreUssd) setUssdPage((p) => p + 1);
-      else if (tabValue === 3 && hasMoreKadito) setKaditoPage((p) => p + 1);
-    }, 300),
+  const debouncedNext = useMemo(
+    () =>
+      debounce(() => {
+        if (tabValue === 0 && hasMoreNumbers) setNumbersPage((p) => p + 1);
+        else if (tabValue === 1 && hasMoreTransactions)
+          setTransactionsPage((p) => p + 1);
+        else if (tabValue === 2 && hasMoreUssd) setUssdPage((p) => p + 1);
+        else if (tabValue === 3 && hasMoreKadito) setKaditoPage((p) => p + 1);
+      }, 300),
     [tabValue, hasMoreNumbers, hasMoreTransactions, hasMoreUssd, hasMoreKadito]
   );
-  // ───────────────────────────────────────────────────────────────────────
 
-  // ──────────────────────  AUTO-CLEAR ERROR  ──────────────────────
+  const handlePrevPage = useCallback(() => debouncedPrev(), [debouncedPrev]);
+  const handleNextPage = useCallback(() => debouncedNext(), [debouncedNext]);
+  /* ──────────────────────────────────────────────────────────────────────── */
+
+  /* ──────────────────────  CLEAR ERROR AFTER 5s  ────────────────────── */
   useEffect(() => {
     if (error) {
       const t = setTimeout(() => setError(null), 5000);
       return () => clearTimeout(t);
     }
   }, [error]);
-  // ───────────────────────────────────────────────────────────────────────
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  // ──────────────────────  RENDER  ──────────────────────
+  /* ──────────────────────  RENDER  ────────────────────── */
   return (
     <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 min-h-screen bg-gray-100">
-      {/* ────── Confirmation Dialog ────── */}
+      {/* Confirmation Dialog */}
       {showConfirmDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
@@ -586,7 +712,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ────── Tabs ────── */}
+      {/* Tabs */}
       <div className="flex flex-wrap border-b border-gray-300 bg-white rounded-lg shadow-sm mb-6">
         <button
           className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
@@ -633,7 +759,7 @@ const Dashboard = () => {
         </button>
       </div>
 
-      {/* ────── Loading / Error ────── */}
+      {/* Loading / Error */}
       {loading && (
         <div className="mt-6 flex justify-center">
           <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-600"></div>
@@ -643,9 +769,8 @@ const Dashboard = () => {
         <p className="mt-6 text-center text-red-500 text-lg">{error}</p>
       )}
 
-      {/* ────── Numbers Tab ────── */}
+      {/* ----- Numbers Tab ----- */}
       {tabValue === 0 && !loading && !error && (
-        /* ... same as original Numbers tab UI ... */
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
             <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
@@ -723,9 +848,8 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ────── Website Transactions Tab ────── */}
+      {/* ----- Website Transactions Tab ----- */}
       {tabValue === 1 && !loading && !error && (
-        /* ... same as original Transactions tab UI ... */
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
             <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
@@ -801,9 +925,8 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ────── USSD Transactions Tab ────── */}
+      {/* ----- USSD Transactions Tab ----- */}
       {tabValue === 2 && !loading && !error && (
-        /* ... same as original USSD tab UI ... */
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
             <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
@@ -879,7 +1002,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ────── KADITO TRANSACTION TAB ────── */}
+      {/* ----- KADITO TRANSACTION TAB ----- */}
       {tabValue === 3 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
