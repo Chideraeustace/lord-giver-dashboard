@@ -9,9 +9,8 @@ import {
   orderBy,
   writeBatch,
   doc,
-  serverTimestamp,
 } from "firebase/firestore";
-import { db } from "./firebase"; // Adjust the import path to your firebase config file
+import { db } from "./firebase";
 import * as XLSX from "xlsx";
 
 /* ──────────────────────  UTILITIES  ────────────────────── */
@@ -44,7 +43,6 @@ const debounce = (func, wait) => {
     timeout = setTimeout(() => func(...args), wait);
   };
 };
-
 /* ──────────────────────────────────────────────────────── */
 
 const Dashboard = () => {
@@ -58,54 +56,45 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Pagination states
+  // pagination
   const [numbersPage, setNumbersPage] = useState(1);
   const [transactionsPage, setTransactionsPage] = useState(1);
   const [ussdPage, setUssdPage] = useState(1);
   const [kaditoPage, setKaditoPage] = useState(1);
 
+  // last docs for cursor pagination
   const [numbersLastDocs, setNumbersLastDocs] = useState([]);
   const [transactionsLastDocs, setTransactionsLastDocs] = useState([]);
   const [ussdLastDocs, setUssdLastDocs] = useState([]);
   const [kaditoLastDocs, setKaditoLastDocs] = useState([]);
 
+  // has-more flags
   const [hasMoreNumbers, setHasMoreNumbers] = useState(true);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
   const [hasMoreUssd, setHasMoreUssd] = useState(true);
   const [hasMoreKadito, setHasMoreKadito] = useState(true);
 
-  // Confirm dialog
+  // confirm dialog
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [recordCount, setRecordCount] = useState(0);
 
-  // Caches
+  // caches
   const [numbersCache, setNumbersCache] = useState({});
   const [transactionsCache, setTransactionsCache] = useState({});
   const [ussdCache, setUssdCache] = useState({});
   const [kaditoCache, setKaditoCache] = useState({});
 
-  // Totals
+  // totals
   const [totalNumbers, setTotalNumbers] = useState(0);
   const [totalTransactions, setTotalTransactions] = useState(0);
   const [totalUssd, setTotalUssd] = useState(0);
   const [totalKadito, setTotalKadito] = useState(0);
 
-  // ─── Bundles Tab State ───
-  const [bundlesTabValue, setBundlesTabValue] = useState(0); // 0 = mtn, 1 = tigo, 2 = telecel
-  const [bundlesData, setBundlesData] = useState({
-    mtn: { daily: [], weekly: [], monthly: [] },
-    tigo: { daily: [], weekly: [], monthly: [] },
-    telecel: { daily: [], weekly: [], monthly: [] },
-  });
-  const [bundlesLoading, setBundlesLoading] = useState(false);
-  const [bundlesError, setBundlesError] = useState(null);
-  const [priceChanges, setPriceChanges] = useState({});
-  const [activeChanges, setActiveChanges] = useState({});
-
   const pageSize = 6;
   const maxExportRecords = 1000;
   const batchSize = 500;
+  /* ──────────────────────────────────────────────────────── */
 
   /* ──────────────────────  TAB HANDLING  ────────────────────── */
   const handleTabChange = useCallback((newValue) => {
@@ -126,13 +115,12 @@ const Dashboard = () => {
       setKaditoPage(1);
       setKaditoLastDocs([]);
       setHasMoreKadito(true);
-    } else if (newValue === 4) {
-      fetchBundles();
     }
     setError(null);
   }, []);
+  /* ──────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  TOTAL COUNTS  ────────────────────── */
+  /* ──────────────────────  TOTAL COUNTS (stable)  ────────────────────── */
   const fetchTotalNumbers = useCallback(async () => {
     try {
       const q = query(
@@ -193,8 +181,9 @@ const Dashboard = () => {
       setError(`Total Kadito: ${e.message}`);
     }
   }, []);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  DATA FETCHERS  ────────────────────── */
+  /* ──────────────────────  DATA FETCHERS (stable)  ────────────────────── */
   const fetchNumbers = useCallback(
     async (page = 1) => {
       if (numbersCache[page]) {
@@ -381,98 +370,9 @@ const Dashboard = () => {
     },
     [kaditoCache, kaditoLastDocs],
   );
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  Bundles Fetch & Save ────────────────────── */
-  const fetchBundles = useCallback(async () => {
-    setBundlesLoading(true);
-    setBundlesError(null);
-    try {
-      const networks = ["mtn", "tigo", "telecel"];
-      const periods = ["daily", "weekly", "monthly"];
-      const newData = {
-        mtn: { daily: [], weekly: [], monthly: [] },
-        tigo: { daily: [], weekly: [], monthly: [] },
-        telecel: { daily: [], weekly: [], monthly: [] },
-      };
-
-      for (const network of networks) {
-        for (const period of periods) {
-          const colRef = collection(db, "bundles", network, period);
-          const q = query(colRef, orderBy("price", "asc"));
-          const snap = await getDocs(q);
-          newData[network][period] = snap.docs.map((d) => ({
-            id: d.id,
-            ...d.data(),
-          }));
-        }
-      }
-      setBundlesData(newData);
-    } catch (err) {
-      setBundlesError(err.message);
-      console.error("Bundles fetch failed:", err);
-    } finally {
-      setBundlesLoading(false);
-    }
-  }, []);
-
-  const handlePriceChange = (network, period, planId, value) => {
-    const key = `${network}/${period}/${planId}`;
-    const numValue = parseFloat(value);
-    setPriceChanges((prev) => ({
-      ...prev,
-      [key]: isNaN(numValue) ? (prev[key] ?? 0) : numValue,
-    }));
-  };
-
-  const handleActiveToggle = (network, period, planId, current) => {
-    const key = `${network}/${period}/${planId}`;
-    setActiveChanges((prev) => ({
-      ...prev,
-      [key]: !current,
-    }));
-  };
-
-  const saveBundleChanges = async () => {
-    if (
-      Object.keys(priceChanges).length === 0 &&
-      Object.keys(activeChanges).length === 0
-    ) {
-      alert("No changes to save");
-      return;
-    }
-
-    if (!window.confirm("Save all price and active status changes?")) return;
-
-    setBundlesLoading(true);
-    try {
-      const batch = writeBatch(db);
-
-      Object.entries(priceChanges).forEach(([key, newPrice]) => {
-        const [network, period, planId] = key.split("/");
-        const ref = doc(db, "bundles", network, period, planId);
-        batch.update(ref, { price: newPrice, updatedAt: serverTimestamp() });
-      });
-
-      Object.entries(activeChanges).forEach(([key, newActive]) => {
-        const [network, period, planId] = key.split("/");
-        const ref = doc(db, "bundles", network, period, planId);
-        batch.update(ref, { active: newActive, updatedAt: serverTimestamp() });
-      });
-
-      await batch.commit();
-      alert("Changes saved successfully");
-      setPriceChanges({});
-      setActiveChanges({});
-      await fetchBundles();
-    } catch (err) {
-      alert("Save failed: " + err.message);
-      console.error(err);
-    } finally {
-      setBundlesLoading(false);
-    }
-  };
-
-  /* ──────────────────────  EFFECT – LOAD DATA  ────────────────────── */
+  /* ──────────────────────  LOAD ON TAB / PAGE CHANGE  ────────────────────── */
   useEffect(() => {
     if (tabValue === 0) {
       fetchNumbers(numbersPage);
@@ -486,8 +386,6 @@ const Dashboard = () => {
     } else if (tabValue === 3) {
       fetchKaditoTransactions(kaditoPage);
       fetchTotalKadito();
-    } else if (tabValue === 4) {
-      fetchBundles();
     }
   }, [
     tabValue,
@@ -503,221 +401,222 @@ const Dashboard = () => {
     fetchTotalTransactions,
     fetchTotalUssd,
     fetchTotalKadito,
-    fetchBundles,
   ]);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  DOWNLOAD HANDLERS  ────────────────────── */
-   const handleDownloadNumbers = useCallback(async () => {
-      try {
-        setLoading(true);
-        const q = query(
-          collection(db, "entries"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
-        const snap = await getDocs(q);
-        const docs = snap.docs;
-        const data = docs.map((d) => ({
-          "Phone Number": formatPhoneNumber(d.data().phoneNumber),
-          "Network Provider": d.data().networkProvider || "N/A",
-        }));
-        setRecordCount(docs.length);
-        for (let i = 0; i < docs.length; i += batchSize) {
-          const batch = writeBatch(db);
-          docs.slice(i, i + batchSize).forEach((docSnap) => {
-            batch.update(doc(db, "entries", docSnap.id), { exported: true });
-          });
-          await batch.commit();
-        }
-        downloadExcel(data, "Numbers.xlsx", ["Phone Number", "Network Provider"]);
-        setNumbersCache({});
-        setNumbersPage(1);
-        setNumbersLastDocs([]);
-        setHasMoreNumbers(true);
-        await fetchNumbers(1);
-        await fetchTotalNumbers();
-      } catch (e) {
-        setError(`Numbers download: ${e.message}`);
-      } finally {
-        setLoading(false);
+  /* ──────────────────────  DOWNLOAD HANDLERS (stable)  ────────────────────── */
+  const handleDownloadNumbers = useCallback(async () => {
+    try {
+      setLoading(true);
+      const q = query(
+        collection(db, "entries"),
+        where("exported", "==", false),
+        limit(maxExportRecords),
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs;
+      const data = docs.map((d) => ({
+        "Phone Number": formatPhoneNumber(d.data().phoneNumber),
+        "Network Provider": d.data().networkProvider || "N/A",
+      }));
+      setRecordCount(docs.length);
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + batchSize).forEach((docSnap) => {
+          batch.update(doc(db, "entries", docSnap.id), { exported: true });
+        });
+        await batch.commit();
       }
-    }, [fetchNumbers, fetchTotalNumbers]);
-  
-    const handleDownloadTransactions = useCallback(async () => {
-      try {
-        setLoading(true);
-        const today = getTodayStart();
-        const q = query(
-          collection(db, "approve_teller_transaction"),
-          where("createdAt", ">=", today),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
-        const snap = await getDocs(q);
-        const docs = snap.docs;
-        const data = docs.map((d) => ({
-          Number: formatPhoneNumber(
-            d.data().subscriber_number || d.data().number
-          ),
-          GB: d.data().gb || extractGB(d.data().desc) || "N/A",
-        }));
-        setRecordCount(docs.length);
-        for (let i = 0; i < docs.length; i += batchSize) {
-          const batch = writeBatch(db);
-          docs.slice(i, i + batchSize).forEach((docSnap) => {
-            batch.update(doc(db, "approve_teller_transaction", docSnap.id), {
-              exported: true,
-            });
-          });
-          await batch.commit();
-        }
-        downloadExcel(data, "Transactions.xlsx", ["Number", "GB"]);
-        setTransactionsCache({});
-        setTransactionsPage(1);
-        setTransactionsLastDocs([]);
-        setHasMoreTransactions(true);
-        await fetchTransactions(1);
-        await fetchTotalTransactions();
-      } catch (e) {
-        setError(`Transactions download: ${e.message}`);
-      } finally {
-        setLoading(false);
-      }
-    }, [fetchTransactions, fetchTotalTransactions]);
-  
-    const handleDownloadUssd = useCallback(async () => {
-      try {
-        setLoading(true);
-        const today = getTodayStart();
-        const q = query(
-          collection(db, "teller_response"),
-          where("createdAt", ">=", today),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
-        const snap = await getDocs(q);
-        const docs = snap.docs;
-        const data = docs.map((d) => ({
-          Number: formatPhoneNumber(
-            d.data().subscriber_number || d.data().number
-          ),
-          GB: d.data().gb || extractGB(d.data().desc) || "N/A",
-        }));
-        setRecordCount(docs.length);
-        for (let i = 0; i < docs.length; i += batchSize) {
-          const batch = writeBatch(db);
-          docs.slice(i, i + batchSize).forEach((docSnap) => {
-            batch.update(doc(db, "teller_response", docSnap.id), {
-              exported: true,
-            });
-          });
-          await batch.commit();
-        }
-        downloadExcel(data, "UssdTransactions.xlsx", ["Number", "GB"]);
-        setUssdCache({});
-        setUssdPage(1);
-        setUssdLastDocs([]);
-        setHasMoreUssd(true);
-        await fetchUssdTransactions(1);
-        await fetchTotalUssd();
-      } catch (e) {
-        setError(`USSD download: ${e.message}`);
-      } finally {
-        setLoading(false);
-      }
-    }, [fetchUssdTransactions, fetchTotalUssd]);
-  
-    const handleDownloadKadito = useCallback(async () => {
-      try {
-        setLoading(true);
-        const today = getTodayStart();
-        const q = query(
-          collection(db, "kadis_purchase"),
-          where("createdAt", ">=", today),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
-        );
-        const snap = await getDocs(q);
-        const docs = snap.docs;
-        const data = docs.map((d) => ({
-          Number: formatPhoneNumber(
-            d.data().subscriber_number || d.data().number
-          ),
-          GB: d.data().gb || extractGB(d.data().desc) || "N/A",
-        }));
-        setRecordCount(docs.length);
-        for (let i = 0; i < docs.length; i += batchSize) {
-          const batch = writeBatch(db);
-          docs.slice(i, i + batchSize).forEach((docSnap) => {
-            batch.update(doc(db, "kadis_purchase", docSnap.id), {
-              exported: true,
-            });
-          });
-          await batch.commit();
-        }
-        downloadExcel(data, "KaditoTransactions.xlsx", ["Number", "GB"]);
-        setKaditoCache({});
-        setKaditoPage(1);
-        setKaditoLastDocs([]);
-        setHasMoreKadito(true);
-        await fetchKaditoTransactions(1);
-        await fetchTotalKadito();
-      } catch (e) {
-        setError(`Kadito download: ${e.message}`);
-      } finally {
-        setLoading(false);
-      }
-    }, [fetchKaditoTransactions, fetchTotalKadito]);
+      downloadExcel(data, "Numbers.xlsx", ["Phone Number", "Network Provider"]);
+      setNumbersCache({});
+      setNumbersPage(1);
+      setNumbersLastDocs([]);
+      setHasMoreNumbers(true);
+      await fetchNumbers(1);
+      await fetchTotalNumbers();
+    } catch (e) {
+      setError(`Numbers download: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchNumbers, fetchTotalNumbers]);
 
-  /* ──────────────────────  CONFIRM DIALOG LOGIC  ────────────────────── */
+  const handleDownloadTransactions = useCallback(async () => {
+    try {
+      setLoading(true);
+      const today = getTodayStart();
+      const q = query(
+        collection(db, "approve_teller_transaction"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false),
+        limit(maxExportRecords),
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs;
+      const data = docs.map((d) => ({
+        Number: formatPhoneNumber(
+          d.data().subscriber_number || d.data().number,
+        ),
+        GB: d.data().gb || extractGB(d.data().desc) || "N/A",
+      }));
+      setRecordCount(docs.length);
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + batchSize).forEach((docSnap) => {
+          batch.update(doc(db, "approve_teller_transaction", docSnap.id), {
+            exported: true,
+          });
+        });
+        await batch.commit();
+      }
+      downloadExcel(data, "Transactions.xlsx", ["Number", "GB"]);
+      setTransactionsCache({});
+      setTransactionsPage(1);
+      setTransactionsLastDocs([]);
+      setHasMoreTransactions(true);
+      await fetchTransactions(1);
+      await fetchTotalTransactions();
+    } catch (e) {
+      setError(`Transactions download: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchTransactions, fetchTotalTransactions]);
+
+  const handleDownloadUssd = useCallback(async () => {
+    try {
+      setLoading(true);
+      const today = getTodayStart();
+      const q = query(
+        collection(db, "teller_response"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false),
+        limit(maxExportRecords),
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs;
+      const data = docs.map((d) => ({
+        Number: formatPhoneNumber(
+          d.data().subscriber_number || d.data().number,
+        ),
+        GB: d.data().gb || extractGB(d.data().desc) || "N/A",
+      }));
+      setRecordCount(docs.length);
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + batchSize).forEach((docSnap) => {
+          batch.update(doc(db, "teller_response", docSnap.id), {
+            exported: true,
+          });
+        });
+        await batch.commit();
+      }
+      downloadExcel(data, "UssdTransactions.xlsx", ["Number", "GB"]);
+      setUssdCache({});
+      setUssdPage(1);
+      setUssdLastDocs([]);
+      setHasMoreUssd(true);
+      await fetchUssdTransactions(1);
+      await fetchTotalUssd();
+    } catch (e) {
+      setError(`USSD download: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchUssdTransactions, fetchTotalUssd]);
+
+  const handleDownloadKadito = useCallback(async () => {
+    try {
+      setLoading(true);
+      const today = getTodayStart();
+      const q = query(
+        collection(db, "kadis_purchase"),
+        where("createdAt", ">=", today),
+        where("status", "==", "approved"),
+        where("exported", "==", false),
+        limit(maxExportRecords),
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs;
+      const data = docs.map((d) => ({
+        Number: formatPhoneNumber(
+          d.data().subscriber_number || d.data().number,
+        ),
+        GB: d.data().gb || extractGB(d.data().desc) || "N/A",
+      }));
+      setRecordCount(docs.length);
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + batchSize).forEach((docSnap) => {
+          batch.update(doc(db, "kadis_purchase", docSnap.id), {
+            exported: true,
+          });
+        });
+        await batch.commit();
+      }
+      downloadExcel(data, "KaditoTransactions.xlsx", ["Number", "GB"]);
+      setKaditoCache({});
+      setKaditoPage(1);
+      setKaditoLastDocs([]);
+      setHasMoreKadito(true);
+      await fetchKaditoTransactions(1);
+      await fetchTotalKadito();
+    } catch (e) {
+      setError(`Kadito download: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchKaditoTransactions, fetchTotalKadito]);
+  /* ──────────────────────────────────────────────────────────────────────── */
+
+  /* ──────────────────────  CONFIRM DIALOG  ────────────────────── */
   const openConfirmDialog = useCallback(
     async (action) => {
       try {
-              setLoading(true);
-              let q;
-              if (tabValue === 0) {
-                q = query(
-                  collection(db, "entries"),
-                  where("exported", "==", false),
-                  limit(maxExportRecords)
-                );
-              } else if (tabValue === 1) {
-                q = query(
-                  collection(db, "approve_teller_transaction"),
-                  where("createdAt", ">=", getTodayStart()),
-                  where("status", "==", "approved"),
-                  where("exported", "==", false),
-                  limit(maxExportRecords)
-                );
-              } else if (tabValue === 2) {
-                q = query(
-                  collection(db, "teller_response"),
-                  where("createdAt", ">=", getTodayStart()),
-                  where("status", "==", "approved"),
-                  where("exported", "==", false),
-                  limit(maxExportRecords)
-                );
-              } else if (tabValue === 3) {
-                q = query(
-                  collection(db, "kadis_purchase"),
-                  where("createdAt", ">=", getTodayStart()),
-                  where("status", "==", "approved"),
-                  where("exported", "==", false),
-                  limit(maxExportRecords)
-                );
-              }
-              const snap = await getDocs(q);
-              setRecordCount(snap.docs.length);
-              setConfirmAction(() => action);
-              setShowConfirmDialog(true);
-            } catch (e) {
-              setError(`Record count: ${e.message}`);
-            } finally {
-              setLoading(false);
-            }
+        setLoading(true);
+        let q;
+        if (tabValue === 0) {
+          q = query(
+            collection(db, "entries"),
+            where("exported", "==", false),
+            limit(maxExportRecords),
+          );
+        } else if (tabValue === 1) {
+          q = query(
+            collection(db, "approve_teller_transaction"),
+            where("createdAt", ">=", getTodayStart()),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            limit(maxExportRecords),
+          );
+        } else if (tabValue === 2) {
+          q = query(
+            collection(db, "teller_response"),
+            where("createdAt", ">=", getTodayStart()),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            limit(maxExportRecords),
+          );
+        } else if (tabValue === 3) {
+          q = query(
+            collection(db, "kadis_purchase"),
+            where("createdAt", ">=", getTodayStart()),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+            limit(maxExportRecords),
+          );
+        }
+        const snap = await getDocs(q);
+        setRecordCount(snap.docs.length);
+        setConfirmAction(() => action);
+        setShowConfirmDialog(true);
+      } catch (e) {
+        setError(`Record count: ${e.message}`);
+      } finally {
+        setLoading(false);
+      }
     },
     [tabValue],
   );
@@ -732,8 +631,9 @@ const Dashboard = () => {
     if (confirmAction) confirmAction();
     closeConfirmDialog();
   }, [confirmAction, closeConfirmDialog]);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  PAGINATION HANDLERS  ────────────────────── */
+  /* ──────────────────────  DEBOUNCED PAGINATION (useMemo + useCallback)  ────────────────────── */
   const debouncedPrev = useMemo(
     () =>
       debounce(() => {
@@ -760,14 +660,16 @@ const Dashboard = () => {
 
   const handlePrevPage = useCallback(() => debouncedPrev(), [debouncedPrev]);
   const handleNextPage = useCallback(() => debouncedNext(), [debouncedNext]);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  CLEAR ERROR  ────────────────────── */
+  /* ──────────────────────  CLEAR ERROR AFTER 5s  ────────────────────── */
   useEffect(() => {
     if (error) {
       const t = setTimeout(() => setError(null), 5000);
       return () => clearTimeout(t);
     }
   }, [error]);
+  /* ──────────────────────────────────────────────────────────────────────── */
 
   /* ──────────────────────  RENDER  ────────────────────── */
   return (
@@ -822,6 +724,7 @@ const Dashboard = () => {
         >
           Numbers
         </button>
+
         <button
           className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
             tabValue === 1
@@ -832,6 +735,7 @@ const Dashboard = () => {
         >
           Website Transactions
         </button>
+
         <button
           className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
             tabValue === 2
@@ -842,6 +746,7 @@ const Dashboard = () => {
         >
           USSD Transactions
         </button>
+
         <button
           className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
             tabValue === 3
@@ -851,16 +756,6 @@ const Dashboard = () => {
           onClick={() => handleTabChange(3)}
         >
           Kadito Transaction
-        </button>
-        <button
-          className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
-            tabValue === 4
-              ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
-              : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
-          }`}
-          onClick={() => handleTabChange(4)}
-        >
-          Bundles
         </button>
       </div>
 
@@ -874,7 +769,7 @@ const Dashboard = () => {
         <p className="mt-6 text-center text-red-500 text-lg">{error}</p>
       )}
 
-      {/* ─── Numbers Tab Content ─── */}
+      {/* ----- Numbers Tab ----- */}
       {tabValue === 0 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -953,7 +848,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ─── Website Transactions Tab Content ─── */}
+      {/* ----- Website Transactions Tab ----- */}
       {tabValue === 1 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -1030,7 +925,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ─── USSD Transactions Tab Content ─── */}
+      {/* ----- USSD Transactions Tab ----- */}
       {tabValue === 2 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -1107,7 +1002,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ─── Kadito Transactions Tab Content ─── */}
+      {/* ----- KADITO TRANSACTION TAB ----- */}
       {tabValue === 3 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -1186,177 +1081,8 @@ const Dashboard = () => {
           )}
         </div>
       )}
-
-      {/* ─── Bundles Management Tab ─── */}
-      {tabValue === 4 && (
-        <div className="mt-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
-            <h2 className="text-2xl font-bold text-gray-800">
-              Manage Data Bundles
-            </h2>
-            <div className="mt-3 sm:mt-0 flex items-center space-x-4">
-              {(Object.keys(priceChanges).length > 0 ||
-                Object.keys(activeChanges).length > 0) && (
-                <button
-                  onClick={saveBundleChanges}
-                  disabled={bundlesLoading}
-                  className="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 shadow-md"
-                >
-                  Save Changes
-                </button>
-              )}
-              <button
-                onClick={fetchBundles}
-                disabled={bundlesLoading}
-                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-
-          {bundlesLoading && (
-            <div className="flex justify-center my-12">
-              <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
-            </div>
-          )}
-
-          {bundlesError && (
-            <p className="text-red-600 text-center text-lg">{bundlesError}</p>
-          )}
-
-          {!bundlesLoading && !bundlesError && (
-            <>
-              {/* Network tabs */}
-              <div className="flex border-b mb-6 overflow-x-auto">
-                {["mtn", "tigo", "telecel"].map((net, idx) => (
-                  <button
-                    key={net}
-                    className={`flex-1 py-3 px-4 font-medium uppercase whitespace-nowrap ${
-                      bundlesTabValue === idx
-                        ? "border-b-4 border-blue-600 text-blue-700"
-                        : "text-gray-500 hover:text-gray-700"
-                    }`}
-                    onClick={() => setBundlesTabValue(idx)}
-                  >
-                    {net.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-
-              {["mtn", "tigo", "telecel"].map((network, idx) => (
-                <div
-                  key={network}
-                  className={bundlesTabValue === idx ? "block" : "hidden"}
-                >
-                  {["daily", "weekly", "monthly"].map((period) => {
-                    const plans = bundlesData[network]?.[period] || [];
-                    if (plans.length === 0) return null;
-
-                    return (
-                      <div key={period} className="mb-10">
-                        <h3 className="text-xl font-semibold capitalize mb-4 text-gray-800">
-                          {period} Plans
-                        </h3>
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full bg-white border border-gray-200">
-                            <thead className="bg-gray-100">
-                              <tr>
-                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
-                                  ID
-                                </th>
-                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
-                                  Name
-                                </th>
-                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
-                                  Size
-                                </th>
-                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
-                                  Price (GHS)
-                                </th>
-                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
-                                  Active
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-200">
-                              {plans.map((plan) => {
-                                const key = `${network}/${period}/${plan.id}`;
-                                const displayPrice =
-                                  priceChanges[key] !== undefined
-                                    ? priceChanges[key]
-                                    : plan.price;
-                                const displayActive =
-                                  activeChanges[key] !== undefined
-                                    ? activeChanges[key]
-                                    : (plan.active ?? true);
-
-                                return (
-                                  <tr
-                                    key={plan.id}
-                                    className="hover:bg-gray-50"
-                                  >
-                                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                                      {plan.id}
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-gray-900">
-                                      {plan.name}
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-gray-900">
-                                      {plan.size}
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <input
-                                        type="number"
-                                        step="0.5"
-                                        min="0"
-                                        value={displayPrice}
-                                        onChange={(e) =>
-                                          handlePriceChange(
-                                            network,
-                                            period,
-                                            plan.id,
-                                            e.target.value,
-                                          )
-                                        }
-                                        className="w-24 px-2 py-1 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
-                                      />
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <input
-                                        type="checkbox"
-                                        checked={displayActive}
-                                        onChange={() =>
-                                          handleActiveToggle(
-                                            network,
-                                            period,
-                                            plan.id,
-                                            plan.active ?? true,
-                                          )
-                                        }
-                                        className="h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                      />
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 };
 
 export default Dashboard;
-
-
-/**/

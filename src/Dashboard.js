@@ -9,8 +9,9 @@ import {
   orderBy,
   writeBatch,
   doc,
+  serverTimestamp,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { db } from "./firebase"; // Adjust the import path to your firebase config file
 import * as XLSX from "xlsx";
 
 /* ──────────────────────  UTILITIES  ────────────────────── */
@@ -21,7 +22,7 @@ const getTodayStart = () => {
 };
 
 const extractGB = (desc) =>
-  !desc ? "N/A" : desc.match(/(\d+)GB/)?.[1] ?? "N/A";
+  !desc ? "N/A" : (desc.match(/(\d+)GB/)?.[1] ?? "N/A");
 
 const formatPhoneNumber = (number) => {
   if (!number) return "N/A";
@@ -43,6 +44,7 @@ const debounce = (func, wait) => {
     timeout = setTimeout(() => func(...args), wait);
   };
 };
+
 /* ──────────────────────────────────────────────────────── */
 
 const Dashboard = () => {
@@ -56,45 +58,54 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // pagination
+  // Pagination states
   const [numbersPage, setNumbersPage] = useState(1);
   const [transactionsPage, setTransactionsPage] = useState(1);
   const [ussdPage, setUssdPage] = useState(1);
   const [kaditoPage, setKaditoPage] = useState(1);
 
-  // last docs for cursor pagination
   const [numbersLastDocs, setNumbersLastDocs] = useState([]);
   const [transactionsLastDocs, setTransactionsLastDocs] = useState([]);
   const [ussdLastDocs, setUssdLastDocs] = useState([]);
   const [kaditoLastDocs, setKaditoLastDocs] = useState([]);
 
-  // has-more flags
   const [hasMoreNumbers, setHasMoreNumbers] = useState(true);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
   const [hasMoreUssd, setHasMoreUssd] = useState(true);
   const [hasMoreKadito, setHasMoreKadito] = useState(true);
 
-  // confirm dialog
+  // Confirm dialog
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [recordCount, setRecordCount] = useState(0);
 
-  // caches
+  // Caches
   const [numbersCache, setNumbersCache] = useState({});
   const [transactionsCache, setTransactionsCache] = useState({});
   const [ussdCache, setUssdCache] = useState({});
   const [kaditoCache, setKaditoCache] = useState({});
 
-  // totals
+  // Totals
   const [totalNumbers, setTotalNumbers] = useState(0);
   const [totalTransactions, setTotalTransactions] = useState(0);
   const [totalUssd, setTotalUssd] = useState(0);
   const [totalKadito, setTotalKadito] = useState(0);
 
+  // ─── Bundles Tab State ───
+  const [bundlesTabValue, setBundlesTabValue] = useState(0); // 0 = mtn, 1 = tigo, 2 = telecel
+  const [bundlesData, setBundlesData] = useState({
+    mtn: { daily: [], weekly: [], monthly: [] },
+    tigo: { daily: [], weekly: [], monthly: [] },
+    telecel: { daily: [], weekly: [], monthly: [] },
+  });
+  const [bundlesLoading, setBundlesLoading] = useState(false);
+  const [bundlesError, setBundlesError] = useState(null);
+  const [priceChanges, setPriceChanges] = useState({});
+  const [activeChanges, setActiveChanges] = useState({});
+
   const pageSize = 6;
   const maxExportRecords = 1000;
   const batchSize = 500;
-  /* ──────────────────────────────────────────────────────── */
 
   /* ──────────────────────  TAB HANDLING  ────────────────────── */
   const handleTabChange = useCallback((newValue) => {
@@ -115,17 +126,18 @@ const Dashboard = () => {
       setKaditoPage(1);
       setKaditoLastDocs([]);
       setHasMoreKadito(true);
+    } else if (newValue === 4) {
+      fetchBundles();
     }
     setError(null);
   }, []);
-  /* ──────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  TOTAL COUNTS (stable)  ────────────────────── */
+  /* ──────────────────────  TOTAL COUNTS  ────────────────────── */
   const fetchTotalNumbers = useCallback(async () => {
     try {
       const q = query(
         collection(db, "entries"),
-        where("exported", "==", false)
+        where("exported", "==", false),
       );
       const snap = await getDocs(q);
       setTotalNumbers(snap.size);
@@ -141,7 +153,7 @@ const Dashboard = () => {
         collection(db, "approve_teller_transaction"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
-        where("exported", "==", false)
+        where("exported", "==", false),
       );
       const snap = await getDocs(q);
       setTotalTransactions(snap.size);
@@ -157,7 +169,7 @@ const Dashboard = () => {
         collection(db, "teller_response"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
-        where("exported", "==", false)
+        where("exported", "==", false),
       );
       const snap = await getDocs(q);
       setTotalUssd(snap.size);
@@ -173,7 +185,7 @@ const Dashboard = () => {
         collection(db, "kadis_purchase"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
-        where("exported", "==", false)
+        where("exported", "==", false),
       );
       const snap = await getDocs(q);
       setTotalKadito(snap.size);
@@ -181,9 +193,8 @@ const Dashboard = () => {
       setError(`Total Kadito: ${e.message}`);
     }
   }, []);
-  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  DATA FETCHERS (stable)  ────────────────────── */
+  /* ──────────────────────  DATA FETCHERS  ────────────────────── */
   const fetchNumbers = useCallback(
     async (page = 1) => {
       if (numbersCache[page]) {
@@ -197,7 +208,7 @@ const Dashboard = () => {
           collection(db, "entries"),
           where("exported", "==", false),
           orderBy("phoneNumber"),
-          limit(pageSize)
+          limit(pageSize),
         );
         if (page > 1 && numbersLastDocs[page - 2]) {
           q = query(
@@ -205,7 +216,7 @@ const Dashboard = () => {
             where("exported", "==", false),
             orderBy("phoneNumber"),
             startAfter(numbersLastDocs[page - 2]),
-            limit(pageSize)
+            limit(pageSize),
           );
         }
         const snap = await getDocs(q);
@@ -224,7 +235,7 @@ const Dashboard = () => {
         setLoading(false);
       }
     },
-    [numbersCache, numbersLastDocs]
+    [numbersCache, numbersLastDocs],
   );
 
   const fetchTransactions = useCallback(
@@ -243,7 +254,7 @@ const Dashboard = () => {
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
-          limit(pageSize)
+          limit(pageSize),
         );
         if (page > 1 && transactionsLastDocs[page - 2]) {
           q = query(
@@ -253,7 +264,7 @@ const Dashboard = () => {
             where("exported", "==", false),
             orderBy("createdAt"),
             startAfter(transactionsLastDocs[page - 2]),
-            limit(pageSize)
+            limit(pageSize),
           );
         }
         const snap = await getDocs(q);
@@ -272,7 +283,7 @@ const Dashboard = () => {
         setLoading(false);
       }
     },
-    [transactionsCache, transactionsLastDocs]
+    [transactionsCache, transactionsLastDocs],
   );
 
   const fetchUssdTransactions = useCallback(
@@ -291,7 +302,7 @@ const Dashboard = () => {
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
-          limit(pageSize)
+          limit(pageSize),
         );
         if (page > 1 && ussdLastDocs[page - 2]) {
           q = query(
@@ -301,7 +312,7 @@ const Dashboard = () => {
             where("exported", "==", false),
             orderBy("createdAt"),
             startAfter(ussdLastDocs[page - 2]),
-            limit(pageSize)
+            limit(pageSize),
           );
         }
         const snap = await getDocs(q);
@@ -320,7 +331,7 @@ const Dashboard = () => {
         setLoading(false);
       }
     },
-    [ussdCache, ussdLastDocs]
+    [ussdCache, ussdLastDocs],
   );
 
   const fetchKaditoTransactions = useCallback(
@@ -339,7 +350,7 @@ const Dashboard = () => {
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
-          limit(pageSize)
+          limit(pageSize),
         );
         if (page > 1 && kaditoLastDocs[page - 2]) {
           q = query(
@@ -349,7 +360,7 @@ const Dashboard = () => {
             where("exported", "==", false),
             orderBy("createdAt"),
             startAfter(kaditoLastDocs[page - 2]),
-            limit(pageSize)
+            limit(pageSize),
           );
         }
         const snap = await getDocs(q);
@@ -368,11 +379,100 @@ const Dashboard = () => {
         setLoading(false);
       }
     },
-    [kaditoCache, kaditoLastDocs]
+    [kaditoCache, kaditoLastDocs],
   );
-  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  LOAD ON TAB / PAGE CHANGE  ────────────────────── */
+  /* ──────────────────────  Bundles Fetch & Save ────────────────────── */
+  const fetchBundles = useCallback(async () => {
+    setBundlesLoading(true);
+    setBundlesError(null);
+    try {
+      const networks = ["mtn", "tigo", "telecel"];
+      const periods = ["daily", "weekly", "monthly"];
+      const newData = {
+        mtn: { daily: [], weekly: [], monthly: [] },
+        tigo: { daily: [], weekly: [], monthly: [] },
+        telecel: { daily: [], weekly: [], monthly: [] },
+      };
+
+      for (const network of networks) {
+        for (const period of periods) {
+          const colRef = collection(db, "bundles", network, period);
+          const q = query(colRef, orderBy("price", "asc"));
+          const snap = await getDocs(q);
+          newData[network][period] = snap.docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+          }));
+        }
+      }
+      setBundlesData(newData);
+    } catch (err) {
+      setBundlesError(err.message);
+      console.error("Bundles fetch failed:", err);
+    } finally {
+      setBundlesLoading(false);
+    }
+  }, []);
+
+  const handlePriceChange = (network, period, planId, value) => {
+    const key = `${network}/${period}/${planId}`;
+    const numValue = parseFloat(value);
+    setPriceChanges((prev) => ({
+      ...prev,
+      [key]: isNaN(numValue) ? (prev[key] ?? 0) : numValue,
+    }));
+  };
+
+  const handleActiveToggle = (network, period, planId, current) => {
+    const key = `${network}/${period}/${planId}`;
+    setActiveChanges((prev) => ({
+      ...prev,
+      [key]: !current,
+    }));
+  };
+
+  const saveBundleChanges = async () => {
+    if (
+      Object.keys(priceChanges).length === 0 &&
+      Object.keys(activeChanges).length === 0
+    ) {
+      alert("No changes to save");
+      return;
+    }
+
+    if (!window.confirm("Save all price and active status changes?")) return;
+
+    setBundlesLoading(true);
+    try {
+      const batch = writeBatch(db);
+
+      Object.entries(priceChanges).forEach(([key, newPrice]) => {
+        const [network, period, planId] = key.split("/");
+        const ref = doc(db, "bundles", network, period, planId);
+        batch.update(ref, { price: newPrice, updatedAt: serverTimestamp() });
+      });
+
+      Object.entries(activeChanges).forEach(([key, newActive]) => {
+        const [network, period, planId] = key.split("/");
+        const ref = doc(db, "bundles", network, period, planId);
+        batch.update(ref, { active: newActive, updatedAt: serverTimestamp() });
+      });
+
+      await batch.commit();
+      alert("Changes saved successfully");
+      setPriceChanges({});
+      setActiveChanges({});
+      await fetchBundles();
+    } catch (err) {
+      alert("Save failed: " + err.message);
+      console.error(err);
+    } finally {
+      setBundlesLoading(false);
+    }
+  };
+
+  /* ──────────────────────  EFFECT – LOAD DATA  ────────────────────── */
   useEffect(() => {
     if (tabValue === 0) {
       fetchNumbers(numbersPage);
@@ -386,6 +486,8 @@ const Dashboard = () => {
     } else if (tabValue === 3) {
       fetchKaditoTransactions(kaditoPage);
       fetchTotalKadito();
+    } else if (tabValue === 4) {
+      fetchBundles();
     }
   }, [
     tabValue,
@@ -401,17 +503,17 @@ const Dashboard = () => {
     fetchTotalTransactions,
     fetchTotalUssd,
     fetchTotalKadito,
+    fetchBundles,
   ]);
-  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  DOWNLOAD HANDLERS (stable)  ────────────────────── */
+  /* ──────────────────────  DOWNLOAD HANDLERS  ────────────────────── */
   const handleDownloadNumbers = useCallback(async () => {
     try {
       setLoading(true);
       const q = query(
         collection(db, "entries"),
         where("exported", "==", false),
-        limit(maxExportRecords)
+        limit(maxExportRecords),
       );
       const snap = await getDocs(q);
       const docs = snap.docs;
@@ -450,13 +552,13 @@ const Dashboard = () => {
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false),
-        limit(maxExportRecords)
+        limit(maxExportRecords),
       );
       const snap = await getDocs(q);
       const docs = snap.docs;
       const data = docs.map((d) => ({
         Number: formatPhoneNumber(
-          d.data().subscriber_number || d.data().number
+          d.data().subscriber_number || d.data().number,
         ),
         GB: d.data().gb || extractGB(d.data().desc) || "N/A",
       }));
@@ -493,13 +595,13 @@ const Dashboard = () => {
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false),
-        limit(maxExportRecords)
+        limit(maxExportRecords),
       );
       const snap = await getDocs(q);
       const docs = snap.docs;
       const data = docs.map((d) => ({
         Number: formatPhoneNumber(
-          d.data().subscriber_number || d.data().number
+          d.data().subscriber_number || d.data().number,
         ),
         GB: d.data().gb || extractGB(d.data().desc) || "N/A",
       }));
@@ -536,13 +638,13 @@ const Dashboard = () => {
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false),
-        limit(maxExportRecords)
+        limit(maxExportRecords),
       );
       const snap = await getDocs(q);
       const docs = snap.docs;
       const data = docs.map((d) => ({
         Number: formatPhoneNumber(
-          d.data().subscriber_number || d.data().number
+          d.data().subscriber_number || d.data().number,
         ),
         GB: d.data().gb || extractGB(d.data().desc) || "N/A",
       }));
@@ -569,9 +671,8 @@ const Dashboard = () => {
       setLoading(false);
     }
   }, [fetchKaditoTransactions, fetchTotalKadito]);
-  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  CONFIRM DIALOG  ────────────────────── */
+  /* ──────────────────────  CONFIRM DIALOG LOGIC  ────────────────────── */
   const openConfirmDialog = useCallback(
     async (action) => {
       try {
@@ -581,7 +682,7 @@ const Dashboard = () => {
           q = query(
             collection(db, "entries"),
             where("exported", "==", false),
-            limit(maxExportRecords)
+            limit(maxExportRecords),
           );
         } else if (tabValue === 1) {
           q = query(
@@ -589,7 +690,7 @@ const Dashboard = () => {
             where("createdAt", ">=", getTodayStart()),
             where("status", "==", "approved"),
             where("exported", "==", false),
-            limit(maxExportRecords)
+            limit(maxExportRecords),
           );
         } else if (tabValue === 2) {
           q = query(
@@ -597,7 +698,7 @@ const Dashboard = () => {
             where("createdAt", ">=", getTodayStart()),
             where("status", "==", "approved"),
             where("exported", "==", false),
-            limit(maxExportRecords)
+            limit(maxExportRecords),
           );
         } else if (tabValue === 3) {
           q = query(
@@ -605,7 +706,7 @@ const Dashboard = () => {
             where("createdAt", ">=", getTodayStart()),
             where("status", "==", "approved"),
             where("exported", "==", false),
-            limit(maxExportRecords)
+            limit(maxExportRecords),
           );
         }
         const snap = await getDocs(q);
@@ -618,7 +719,7 @@ const Dashboard = () => {
         setLoading(false);
       }
     },
-    [tabValue]
+    [tabValue],
   );
 
   const closeConfirmDialog = useCallback(() => {
@@ -631,9 +732,8 @@ const Dashboard = () => {
     if (confirmAction) confirmAction();
     closeConfirmDialog();
   }, [confirmAction, closeConfirmDialog]);
-  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  DEBOUNCED PAGINATION (useMemo + useCallback)  ────────────────────── */
+  /* ──────────────────────  PAGINATION HANDLERS  ────────────────────── */
   const debouncedPrev = useMemo(
     () =>
       debounce(() => {
@@ -643,7 +743,7 @@ const Dashboard = () => {
         else if (tabValue === 2 && ussdPage > 1) setUssdPage((p) => p - 1);
         else if (tabValue === 3 && kaditoPage > 1) setKaditoPage((p) => p - 1);
       }, 300),
-    [tabValue, numbersPage, transactionsPage, ussdPage, kaditoPage]
+    [tabValue, numbersPage, transactionsPage, ussdPage, kaditoPage],
   );
 
   const debouncedNext = useMemo(
@@ -655,21 +755,19 @@ const Dashboard = () => {
         else if (tabValue === 2 && hasMoreUssd) setUssdPage((p) => p + 1);
         else if (tabValue === 3 && hasMoreKadito) setKaditoPage((p) => p + 1);
       }, 300),
-    [tabValue, hasMoreNumbers, hasMoreTransactions, hasMoreUssd, hasMoreKadito]
+    [tabValue, hasMoreNumbers, hasMoreTransactions, hasMoreUssd, hasMoreKadito],
   );
 
   const handlePrevPage = useCallback(() => debouncedPrev(), [debouncedPrev]);
   const handleNextPage = useCallback(() => debouncedNext(), [debouncedNext]);
-  /* ──────────────────────────────────────────────────────────────────────── */
 
-  /* ──────────────────────  CLEAR ERROR AFTER 5s  ────────────────────── */
+  /* ──────────────────────  CLEAR ERROR  ────────────────────── */
   useEffect(() => {
     if (error) {
       const t = setTimeout(() => setError(null), 5000);
       return () => clearTimeout(t);
     }
   }, [error]);
-  /* ──────────────────────────────────────────────────────────────────────── */
 
   /* ──────────────────────  RENDER  ────────────────────── */
   return (
@@ -686,10 +784,10 @@ const Dashboard = () => {
               {tabValue === 0
                 ? "numbers"
                 : tabValue === 1
-                ? "transactions"
-                : tabValue === 2
-                ? "ussd transactions"
-                : "kadito transactions"}
+                  ? "transactions"
+                  : tabValue === 2
+                    ? "ussd transactions"
+                    : "kadito transactions"}
               ?
               {recordCount >= maxExportRecords &&
                 ` (first ${maxExportRecords} only)`}
@@ -724,7 +822,6 @@ const Dashboard = () => {
         >
           Numbers
         </button>
-
         <button
           className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
             tabValue === 1
@@ -735,7 +832,6 @@ const Dashboard = () => {
         >
           Website Transactions
         </button>
-
         <button
           className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
             tabValue === 2
@@ -746,7 +842,6 @@ const Dashboard = () => {
         >
           USSD Transactions
         </button>
-
         <button
           className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
             tabValue === 3
@@ -756,6 +851,16 @@ const Dashboard = () => {
           onClick={() => handleTabChange(3)}
         >
           Kadito Transaction
+        </button>
+        <button
+          className={`flex-1 px-4 py-3 text-sm font-semibold sm:text-base ${
+            tabValue === 4
+              ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
+              : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
+          }`}
+          onClick={() => handleTabChange(4)}
+        >
+          Bundles
         </button>
       </div>
 
@@ -769,7 +874,7 @@ const Dashboard = () => {
         <p className="mt-6 text-center text-red-500 text-lg">{error}</p>
       )}
 
-      {/* ----- Numbers Tab ----- */}
+      {/* ─── Numbers Tab Content ─── */}
       {tabValue === 0 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -848,7 +953,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ----- Website Transactions Tab ----- */}
+      {/* ─── Website Transactions Tab Content ─── */}
       {tabValue === 1 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -925,7 +1030,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ----- USSD Transactions Tab ----- */}
+      {/* ─── USSD Transactions Tab Content ─── */}
       {tabValue === 2 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -1002,7 +1107,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ----- KADITO TRANSACTION TAB ----- */}
+      {/* ─── Kadito Transactions Tab Content ─── */}
       {tabValue === 3 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -1081,8 +1186,176 @@ const Dashboard = () => {
           )}
         </div>
       )}
+
+      {/* ─── Bundles Management Tab ─── */}
+      {tabValue === 4 && (
+        <div className="mt-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
+            <h2 className="text-2xl font-bold text-gray-800">
+              Manage Data Bundles
+            </h2>
+            <div className="mt-3 sm:mt-0 flex items-center space-x-4">
+              {(Object.keys(priceChanges).length > 0 ||
+                Object.keys(activeChanges).length > 0) && (
+                <button
+                  onClick={saveBundleChanges}
+                  disabled={bundlesLoading}
+                  className="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 shadow-md"
+                >
+                  Save Changes
+                </button>
+              )}
+              <button
+                onClick={fetchBundles}
+                disabled={bundlesLoading}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {bundlesLoading && (
+            <div className="flex justify-center my-12">
+              <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
+            </div>
+          )}
+
+          {bundlesError && (
+            <p className="text-red-600 text-center text-lg">{bundlesError}</p>
+          )}
+
+          {!bundlesLoading && !bundlesError && (
+            <>
+              {/* Network tabs */}
+              <div className="flex border-b mb-6 overflow-x-auto">
+                {["mtn", "tigo", "telecel"].map((net, idx) => (
+                  <button
+                    key={net}
+                    className={`flex-1 py-3 px-4 font-medium uppercase whitespace-nowrap ${
+                      bundlesTabValue === idx
+                        ? "border-b-4 border-blue-600 text-blue-700"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                    onClick={() => setBundlesTabValue(idx)}
+                  >
+                    {net.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+
+              {["mtn", "tigo", "telecel"].map((network, idx) => (
+                <div
+                  key={network}
+                  className={bundlesTabValue === idx ? "block" : "hidden"}
+                >
+                  {["daily", "weekly", "monthly"].map((period) => {
+                    const plans = bundlesData[network]?.[period] || [];
+                    if (plans.length === 0) return null;
+
+                    return (
+                      <div key={period} className="mb-10">
+                        <h3 className="text-xl font-semibold capitalize mb-4 text-gray-800">
+                          {period} Plans
+                        </h3>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full bg-white border border-gray-200">
+                            <thead className="bg-gray-100">
+                              <tr>
+                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
+                                  ID
+                                </th>
+                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
+                                  Name
+                                </th>
+                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
+                                  Size
+                                </th>
+                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
+                                  Price (GHS)
+                                </th>
+                                <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">
+                                  Active
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200">
+                              {plans.map((plan) => {
+                                const key = `${network}/${period}/${plan.id}`;
+                                const displayPrice =
+                                  priceChanges[key] !== undefined
+                                    ? priceChanges[key]
+                                    : plan.price;
+                                const displayActive =
+                                  activeChanges[key] !== undefined
+                                    ? activeChanges[key]
+                                    : (plan.active ?? true);
+
+                                return (
+                                  <tr
+                                    key={plan.id}
+                                    className="hover:bg-gray-50"
+                                  >
+                                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                                      {plan.id}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-900">
+                                      {plan.name}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-900">
+                                      {plan.size}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        min="0"
+                                        value={displayPrice}
+                                        onChange={(e) =>
+                                          handlePriceChange(
+                                            network,
+                                            period,
+                                            plan.id,
+                                            e.target.value,
+                                          )
+                                        }
+                                        className="w-24 px-2 py-1 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                                      />
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <input
+                                        type="checkbox"
+                                        checked={displayActive}
+                                        onChange={() =>
+                                          handleActiveToggle(
+                                            network,
+                                            period,
+                                            plan.id,
+                                            plan.active ?? true,
+                                          )
+                                        }
+                                        className="h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                                      />
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };
 
 export default Dashboard;
+
+
