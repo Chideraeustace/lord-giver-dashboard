@@ -90,6 +90,7 @@ const Dashboard = () => {
   const [totalTransactions, setTotalTransactions] = useState(0);
   const [totalUssd, setTotalUssd] = useState(0);
   const [totalKadito, setTotalKadito] = useState(0);
+  const [selectedKaditoNetwork, setSelectedKaditoNetwork] = useState("all");
 
   // ─── Bundles Tab State ───
   const [bundlesTabValue, setBundlesTabValue] = useState(0); // 0 = mtn, 1 = tigo, 2 = telecel
@@ -181,18 +182,23 @@ const Dashboard = () => {
   const fetchTotalKadito = useCallback(async () => {
     try {
       const today = getTodayStart();
-      const q = query(
+      let q = query(
         collection(db, "kadis_purchase"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false),
       );
+
+      if (selectedKaditoNetwork !== "all") {
+        q = query(q, where("webhook_provider", "==", selectedKaditoNetwork));
+      }
+
       const snap = await getDocs(q);
       setTotalKadito(snap.size);
     } catch (e) {
       setError(`Total Kadito: ${e.message}`);
     }
-  }, []);
+  }, [selectedKaditoNetwork]);
 
   /* ──────────────────────  DATA FETCHERS  ────────────────────── */
   const fetchNumbers = useCallback(
@@ -336,15 +342,19 @@ const Dashboard = () => {
 
   const fetchKaditoTransactions = useCallback(
     async (page = 1) => {
-      if (kaditoCache[page]) {
-        setKaditoTransactions(kaditoCache[page]);
+      const cacheKey = `${page}-${selectedKaditoNetwork}`;
+
+      if (kaditoCache[cacheKey]) {
+        setKaditoTransactions(kaditoCache[cacheKey]);
         setLoading(false);
         return;
       }
+
       try {
         setLoading(true);
         const today = getTodayStart();
-        let q = query(
+
+        let baseQuery = query(
           collection(db, "kadis_purchase"),
           where("createdAt", ">=", today),
           where("status", "==", "approved"),
@@ -352,26 +362,33 @@ const Dashboard = () => {
           orderBy("createdAt"),
           limit(pageSize),
         );
-        if (page > 1 && kaditoLastDocs[page - 2]) {
-          q = query(
-            collection(db, "kadis_purchase"),
-            where("createdAt", ">=", today),
-            where("status", "==", "approved"),
-            where("exported", "==", false),
-            orderBy("createdAt"),
-            startAfter(kaditoLastDocs[page - 2]),
-            limit(pageSize),
+
+        if (selectedKaditoNetwork !== "all") {
+          baseQuery = query(
+            baseQuery,
+            where("webhook_provider", "==", selectedKaditoNetwork),
           );
         }
+
+        let q = baseQuery;
+
+        if (page > 1 && kaditoLastDocs[cacheKey]) {
+          q = query(baseQuery, startAfter(kaditoLastDocs[cacheKey]));
+        }
+
         const snap = await getDocs(q);
         const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
         setKaditoTransactions(data);
-        setKaditoCache((p) => ({ ...p, [page]: data }));
+        setKaditoCache((prev) => ({ ...prev, [cacheKey]: data }));
+
         if (snap.docs.length > 0) {
-          const newLast = [...kaditoLastDocs];
-          newLast[page - 1] = snap.docs[snap.docs.length - 1];
-          setKaditoLastDocs(newLast);
+          setKaditoLastDocs((prev) => ({
+            ...prev,
+            [cacheKey]: snap.docs[snap.docs.length - 1],
+          }));
         }
+
         setHasMoreKadito(snap.docs.length === pageSize);
         setLoading(false);
       } catch (e) {
@@ -379,9 +396,8 @@ const Dashboard = () => {
         setLoading(false);
       }
     },
-    [kaditoCache, kaditoLastDocs],
+    [kaditoCache, kaditoLastDocs, selectedKaditoNetwork],
   );
-
   /* ──────────────────────  Bundles Fetch & Save ────────────────────── */
   const fetchBundles = useCallback(async () => {
     setBundlesLoading(true);
@@ -633,22 +649,39 @@ const Dashboard = () => {
     try {
       setLoading(true);
       const today = getTodayStart();
-      const q = query(
+
+      let q = query(
         collection(db, "kadis_purchase"),
         where("createdAt", ">=", today),
         where("status", "==", "approved"),
         where("exported", "==", false),
         limit(maxExportRecords),
       );
+
+      if (selectedKaditoNetwork !== "all") {
+        q = query(q, where("webhook_provider", "==", selectedKaditoNetwork));
+      }
+
       const snap = await getDocs(q);
       const docs = snap.docs;
-      const data = docs.map((d) => ({
-        Number: formatPhoneNumber(
-          d.data().subscriber_number || d.data().number,
-        ),
-        GB: d.data().gb || extractGB(d.data().desc) || "N/A",
-      }));
-      setRecordCount(docs.length);
+
+      const data = docs.map((d) => {
+        const item = d.data();
+        return {
+          Network: item.webhook_provider
+            ? item.webhook_provider.toUpperCase()
+            : "N/A",
+          Number: formatPhoneNumber(
+            item.subscriber_number || item.ussd_msisdn || item.number,
+          ),
+          GB: item.gb || extractGB(item.desc) || "N/A",
+          Plan: item.desc || "N/A",
+          Amount: item.webhook_amount || "N/A",
+          Date: item.createdAt?.toDate?.()?.toLocaleString() || "N/A",
+        };
+      });
+
+      // Mark as exported (same as before)
       for (let i = 0; i < docs.length; i += batchSize) {
         const batch = writeBatch(db);
         docs.slice(i, i + batchSize).forEach((docSnap) => {
@@ -658,11 +691,27 @@ const Dashboard = () => {
         });
         await batch.commit();
       }
-      downloadExcel(data, "KaditoTransactions.xlsx", ["Number", "GB"]);
+
+      const filename =
+        selectedKaditoNetwork === "all"
+          ? "Kadito_All_Transactions.xlsx"
+          : `Kadito_${selectedKaditoNetwork.toUpperCase()}_Transactions.xlsx`;
+
+      downloadExcel(data, filename, [
+        "Network",
+        "Number",
+        "GB",
+        "Plan",
+        "Amount",
+        "Date",
+      ]);
+
+      // Reset pagination/cache
       setKaditoCache({});
+      setKaditoLastDocs({});
       setKaditoPage(1);
-      setKaditoLastDocs([]);
       setHasMoreKadito(true);
+
       await fetchKaditoTransactions(1);
       await fetchTotalKadito();
     } catch (e) {
@@ -670,7 +719,7 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [fetchKaditoTransactions, fetchTotalKadito]);
+  }, [selectedKaditoNetwork, fetchKaditoTransactions, fetchTotalKadito]);
 
   /* ──────────────────────  CONFIRM DIALOG LOGIC  ────────────────────── */
   const openConfirmDialog = useCallback(
@@ -1122,6 +1171,23 @@ const Dashboard = () => {
                 Download Kadito (Excel)
               </button>
             )}
+            <select
+              value={selectedKaditoNetwork}
+              onChange={(e) => {
+                setSelectedKaditoNetwork(e.target.value);
+                setKaditoPage(1);
+                setKaditoLastDocs({});
+                setKaditoCache({});
+                setHasMoreKadito(true);
+              }}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm min-w-[140px]"
+            >
+              <option value="all">All Networks</option>
+              <option value="mtn">MTN</option>
+              <option value="tigo">AirtelTigo</option>
+              <option value="vodafone">Telecel</option>
+              {/* Add others only if you have seen them in webhook_provider */}
+            </select>
           </div>
 
           <p className="text-sm text-gray-600 mb-4">
@@ -1139,13 +1205,33 @@ const Dashboard = () => {
                   >
                     <p className="text-sm sm:text-base">
                       <span className="font-semibold text-gray-700">
+                        Network:
+                      </span>{" "}
+                      {tx.webhook_provider
+                        ? tx.webhook_provider.toUpperCase()
+                        : "Unknown"}
+                    </p>
+                    <p className="text-sm sm:text-base">
+                      <span className="font-semibold text-gray-700">
                         Number:
                       </span>{" "}
-                      {formatPhoneNumber(tx.subscriber_number || tx.number)}
+                      {formatPhoneNumber(
+                        tx.subscriber_number || tx.ussd_msisdn,
+                      )}
+                    </p>
+                    <p className="text-sm sm:text-base">
+                      <span className="font-semibold text-gray-700">Plan:</span>{" "}
+                      {tx.desc || "N/A"}
                     </p>
                     <p className="text-sm sm:text-base">
                       <span className="font-semibold text-gray-700">GB:</span>{" "}
                       {tx.gb || extractGB(tx.desc) || "N/A"}
+                    </p>
+                    <p className="text-sm sm:text-base">
+                      <span className="font-semibold text-gray-700">
+                        Amount:
+                      </span>{" "}
+                      {tx.webhook_amount ? `GHS ${tx.webhook_amount}` : "N/A"}
                     </p>
                   </div>
                 ))}
@@ -1357,5 +1443,3 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
-
-
